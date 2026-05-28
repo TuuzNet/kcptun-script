@@ -1,22 +1,30 @@
 # kcptun script
 
-使用KCP协议通过TCP中转UDP的脚本
+使用KCP协议通过TCP中转UDP的脚本2026版
 
 
+
+```sh
+$ tree
+├── kcptun
+│   └── kcptun.sh # kcptun 一键安装脚本
+└── ovz-bbr
+    └── ovz-bbr-installer.sh # OpenVZ BBR 一键安装脚本
+```
 
 ## Kcptun 一键安装脚本
 
 * Ubuntu：
 ```sh
 apt install python-is-python3 -y
-wget --no-check-certificate -O kcptun.sh https://github.com/kuoruan/shell-scripts/raw/master/kcptun/kcptun.sh
+wget --no-check-certificate -O kcptun.sh https://github.com/tobycroft/shell-scripts/raw/master/kcptun/kcptun.sh
 sh kcptun.sh
 ```
 
 
 * 其他Linux安装命令：
 ```sh
-wget --no-check-certificate -O kcptun.sh https://github.com/kuoruan/shell-scripts/raw/master/kcptun/kcptun.sh
+wget --no-check-certificate -O kcptun.sh https://github.com/tobycroft/shell-scripts/raw/master/kcptun/kcptun.sh
 sh kcptun.sh
 ```
 
@@ -51,17 +59,3 @@ Kcptun 相关命令:
                   {启动|关闭|重启|查看状态}
 ```
 
-## OpenVZ BBR 一键安装脚本
-
-* 安装命令：
-
-```sh
-wget --no-check-certificate -O ovz-bbr-installer.sh https://github.com/kuoruan/shell-scripts/raw/master/ovz-bbr/ovz-bbr-installer.sh
-sh ovz-bbr-installer.sh
-```
-
-* 卸载命令
-
-```sh
-sh ovz-bbr-installer.sh uninstall
-```
