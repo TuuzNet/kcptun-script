@@ -1,6 +1,6 @@
 # kcptun-script
 
-> Kcptun 服务端一键安装与管理脚本 · 当前版本 **v38**
+> Kcptun 服务端一键安装与管理脚本 · 当前版本 **v39**
 
 本脚本用于在一台 Linux 服务器上快速部署 [Kcptun](https://github.com/tobycroft/kcptun) 服务端：自动下载主程序、生成配置、托管为系统服务，并提供多实例管理与在线更新能力。
 
@@ -241,7 +241,7 @@ jitter        : 3.20ms
 
 | 版本 | 含义 | 当前值 |
 | --- | --- | --- |
-| `shell_version` | 安装脚本版本 | `38` |
+| `shell_version` | 安装脚本版本 | `39` |
 | `config_version` | 服务端配置格式版本 | `7` |
 | `init_version` | 服务文件版本 | `4` |
 
@@ -249,6 +249,7 @@ jitter        : 3.20ms
 - `update`：命令行一次性更新（先更新 Kcptun，再更新安装脚本）
 - 启动提示：已安装时运行脚本会对比安装脚本与 Kcptun 的最新版本，**仅提示，不自动更新**；网络不可用时静默跳过
 - 更新菜单：主菜单选择 `4` 进入，可分别更新「安装脚本」或「Kcptun」，也可选择全部更新
+- 访问 GitHub API 受限时，可设置只读 `GITHUB_TOKEN` 提升限额（匿名仅 60 次/小时），或用 `KCPTUN_RELEASES_API` 指向自建 API 镜像
 - 推送 `v*` tag 后，仓库内的 GitHub Actions 会自动创建对应 Release 并附带 `kcptun.sh`
 
 发布新版本：修改版本号 → 更新 `version.json` → 提交 → `git tag -a vXX && git push origin main --tags`。
@@ -277,6 +278,7 @@ sh kcptun.sh migrate
 - **低端口**：监听端口 ≤ 1024 或开启 TCP 模式时，服务自动以 root 运行
 - **防火墙**：自动识别 firewalld / ufw / iptables；已关闭的防火墙不会被启动或重启，失败时输出手动命令
 - **下载失败**：设置 `GITHUB_PROXY` 或 `KCPTUN_RELEASES_API` 使用镜像
+- **Kcptun: 获取失败**：通常是服务器无法访问 `api.github.com` 或匿名 API 限流。执行 `curl -i https://api.github.com/repos/tobycroft/kcptun/releases/latest` 查看状态码；403 可稍后重试或设置只读 `GITHUB_TOKEN`；连接超时请检查网络，或设置 `KCPTUN_RELEASES_API` 镜像。注意 `GITHUB_PROXY` 只代理 `github.com`，不代理 `api.github.com`
 - **版本回退**：`sh kcptun.sh manual` 输入完整 TAG 即可安装历史版本
 
 ---

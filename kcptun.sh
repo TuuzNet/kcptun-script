@@ -8,7 +8,7 @@ export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
 # 版本信息，请勿修改
 # =================
-SHELL_VERSION=38
+SHELL_VERSION=39
 CONFIG_VERSION=7
 INIT_VERSION=4
 # =================
@@ -385,14 +385,60 @@ url_with_proxy() {
 }
 
 # 输出 URL 内容，优先 wget，缺失时回退 curl
+# 仅对 GitHub API 请求附带 token，避免把凭据发送给第三方镜像
+github_auth_header() {
+	local url="$1"
+	if [ -n "${GITHUB_TOKEN:-}" ]; then
+		case "$url" in
+			https://api.github.com/*)
+				printf 'Authorization: Bearer %s' "$GITHUB_TOKEN"
+				;;
+		esac
+	fi
+}
+
+# 探测 URL 的 HTTP 状态码，失败时用于给出可读原因
+https_probe_status() {
+	local url=""
+	url="$(url_with_proxy "$1")"
+	local auth=""
+	auth="$(github_auth_header "$url")"
+	local status=""
+
+	if command_exists curl; then
+		if [ -n "$auth" ]; then
+			status="$(curl -s -o /dev/null -w '%{http_code}' --insecure --max-time 10 -H "User-Agent: kcptun-script/${SHELL_VERSION}" -H "$auth" "$url" 2>/dev/null)"
+		else
+			status="$(curl -s -o /dev/null -w '%{http_code}' --insecure --max-time 10 -H "User-Agent: kcptun-script/${SHELL_VERSION}" "$url" 2>/dev/null)"
+		fi
+	elif command_exists wget; then
+		if [ -n "$auth" ]; then
+			status="$(wget --server-response --spider --no-check-certificate --timeout=10 --header="User-Agent: kcptun-script/${SHELL_VERSION}" --header="$auth" "$url" 2>&1 | awk '/HTTP\//{code=$2} END{print code}')"
+		else
+			status="$(wget --server-response --spider --no-check-certificate --timeout=10 --header="User-Agent: kcptun-script/${SHELL_VERSION}" "$url" 2>&1 | awk '/HTTP\//{code=$2} END{print code}')"
+		fi
+	fi
+	printf '%s' "$status"
+}
+
 https_get() {
 	local url=""
 	url="$(url_with_proxy "$1")"
+	local auth=""
+	auth="$(github_auth_header "$url")"
 
 	if command_exists wget; then
-		wget -qO- --no-check-certificate "$url"
+		if [ -n "$auth" ]; then
+			wget -qO- --no-check-certificate --header="User-Agent: kcptun-script/${SHELL_VERSION}" --header="$auth" "$url"
+		else
+			wget -qO- --no-check-certificate --header="User-Agent: kcptun-script/${SHELL_VERSION}" "$url"
+		fi
 	elif command_exists curl; then
-		curl -fsSL --insecure "$url"
+		if [ -n "$auth" ]; then
+			curl -fsSL --insecure -H "User-Agent: kcptun-script/${SHELL_VERSION}" -H "$auth" "$url"
+		else
+			curl -fsSL --insecure -H "User-Agent: kcptun-script/${SHELL_VERSION}" "$url"
+		fi
 	else
 		return 1
 	fi
@@ -419,9 +465,9 @@ https_get_quick() {
 	url="$(url_with_proxy "$1")"
 
 	if command_exists wget; then
-		wget -qO- --no-check-certificate --tries=1 --timeout=5 "$url"
+		wget -qO- --no-check-certificate --tries=1 --timeout=5 --header="User-Agent: kcptun-script/${SHELL_VERSION}" "$url"
 	elif command_exists curl; then
-		curl -fsSL --insecure --max-time 5 "$url"
+		curl -fsSL --insecure --max-time 5 -H "User-Agent: kcptun-script/${SHELL_VERSION}" "$url"
 	else
 		return 1
 	fi
@@ -448,8 +494,8 @@ get_content() {
 			return 1
 		fi
 
-		# 将所有的换行符替换为自定义标签，防止 jq 解析失败
-		content="$(https_get "$url" | sed -r 's/(\\r)?\\n/#br#/g')"
+		# 去掉 CRLF 中的 CR，保留换行，jq 可直接解析
+		content="$(https_get "$url" | tr -d '\r')"
 
 		if [ "$?" != "0" ] || [ -z "$content" ]; then
 			retry=$(expr $retry + 1)
@@ -458,7 +504,7 @@ get_content() {
 	}
 
 	get_network_content || return 1
-	echo "$content"
+	printf '%s' "$content"
 }
 
 # 下载文件， 默认重试 3 次
@@ -641,13 +687,13 @@ get_json_string() {
 
 	local str=""
 	if [ -n "$content" ]; then
-		str="$(echo "$content" | $JQ_BIN -r "$selector" 2>/dev/null)"
+		str="$(printf '%s' "$content" | $JQ_BIN -r "$selector" 2>/dev/null)"
 
 		if [ -n "$str" ] && [ -n "$regex" ]; then
-			str="$(echo "$str" | grep -oE "$regex")"
+			str="$(printf '%s' "$str" | grep -oE "$regex")"
 		fi
 	fi
-	echo "$str"
+	printf '%s' "$str"
 }
 
 # 获取当前实例的文件路径，传入参数：
@@ -795,9 +841,37 @@ disable_instance_service() {
 
 # 通过 API 获取对应版本号 Kcptun 的 release 信息
 # 传入 Kcptun 版本号
+# 根据 HTTP 状态给出 Kcptun 版本获取失败的可读原因
+kcptun_api_error_hint() {
+	local request_version="$1"
+	local url="$KCPTUN_LATEST_RELEASE_URL"
+	[ -n "$request_version" ] && url="${KCPTUN_RELEASES_API}?per_page=100"
+
+	local status=""
+	status="$(https_probe_status "$url")"
+	case "$status" in
+		403|429)
+			printf 'GitHub API 限流(HTTP %s)，请稍后重试或设置 GITHUB_TOKEN' "$status"
+			;;
+		5??)
+			printf 'GitHub API 服务异常(HTTP %s)' "$status"
+			;;
+		200)
+			printf 'GitHub API 响应为空或解析失败'
+			;;
+		''|000)
+			printf '无法访问 api.github.com，请检查网络或配置 KCPTUN_RELEASES_API 镜像'
+			;;
+		*)
+			printf 'GitHub API 返回 HTTP %s' "$status"
+			;;
+	esac
+}
+
 get_kcptun_version_info() {
 	local request_version="$1"
 	local fatal="${2:-true}"
+	kcptun_version_error=""
 
 	local version_content=""
 	if [ -n "$request_version" ]; then
@@ -810,6 +884,7 @@ get_kcptun_version_info() {
 	fi
 
 	if [ -z "$version_content" ]; then
+		kcptun_version_error="$(kcptun_api_error_hint "$request_version")"
 		return 1
 	fi
 
@@ -817,28 +892,29 @@ get_kcptun_version_info() {
 		get_arch
 	fi
 
+	kcptun_release_tag_name="$(get_json_string "$version_content" '.tag_name')"
+
 	local server_asset="server_${file_suffix}"
 	local url_selector=".assets[] | select(.name == \"${server_asset}\") | .browser_download_url"
 	kcptun_release_download_url="$(get_json_string "$version_content" "$url_selector")"
 
 	if [ -z "$kcptun_release_download_url" ]; then
+		kcptun_version_error="Release ${kcptun_release_tag_name:-未知} 中缺少 server_${file_suffix} 资产"
 		return 1
 	fi
 
 	local checksums_selector=".assets[] | select(.name == \"checksums.txt\") | .browser_download_url"
 	kcptun_release_checksums_url="$(get_json_string "$version_content" "$checksums_selector")"
-
-	kcptun_release_tag_name="$(get_json_string "$version_content" '.tag_name')"
 	kcptun_release_name="$(get_json_string "$version_content" '.name')"
 	kcptun_release_prerelease="$(get_json_string "$version_content" '.prerelease')"
 	kcptun_release_publish_time="$(get_json_string "$version_content" '.published_at')"
 	kcptun_release_html_url="$(get_json_string "$version_content" '.html_url')"
 
 	local body_content="$(get_json_string "$version_content" '.body')"
-	local body="$(echo "$body_content" | sed 's/#br#/\n/g' | grep -vE '(^```)|(^>)|(^[[:space:]]*$)')"
+	local body="$(printf '%s' "$body_content" | grep -vE '(^```)|(^>)|(^[[:space:]]*$)')"
 
 	# 更新说明中去掉长串哈希，避免刷屏
-	kcptun_release_body="$(echo "$body" | grep -vE "[0-9a-zA-Z]{32,}")"
+	kcptun_release_body="$(printf '%s' "$body" | grep -vE "[0-9a-zA-Z]{32,}")"
 
 	return 0
 }
@@ -888,7 +964,7 @@ get_kcptun_checksum() {
 		return 0
 	fi
 
-	echo "$checksum_content" | \
+	printf '%s' "$checksum_content" | \
 		awk -v plain="$asset_name" -v prefixed="./$asset_name" \
 			'$2 == plain || $2 == prefixed { print $1; exit }'
 }
@@ -2870,20 +2946,20 @@ check_update_notice() {
 	local notices=""
 
 	local shell_content=""
-	shell_content="$(https_get_quick "$SHELL_VERSION_INFO_URL" 2>/dev/null | sed -r 's/(\\r)?\\n/#br#/g')"
+	shell_content="$(https_get_quick "$SHELL_VERSION_INFO_URL" 2>/dev/null | tr -d '\r')"
 	if [ -n "$shell_content" ]; then
 		local remote_shell=""
-		remote_shell="$(echo "$shell_content" | grep -oE '"shell_version"[[:space:]]*:[[:space:]]*[0-9]+' | head -n 1 | grep -oE '[0-9]+$')"
+		remote_shell="$(printf '%s' "$shell_content" | grep -oE '"shell_version"[[:space:]]*:[[:space:]]*[0-9]+' | head -n 1 | grep -oE '[0-9]+$')"
 		if is_number "$remote_shell" && [ "$remote_shell" -gt "$SHELL_VERSION" ]; then
 			notices="${notices}  - 安装脚本: v${SHELL_VERSION} -> v${remote_shell}\n"
 		fi
 	fi
 
 	local kcptun_content=""
-	kcptun_content="$(https_get_quick "$KCPTUN_LATEST_RELEASE_URL" 2>/dev/null | sed -r 's/(\\r)?\\n/#br#/g')"
+	kcptun_content="$(https_get_quick "$KCPTUN_LATEST_RELEASE_URL" 2>/dev/null | tr -d '\r')"
 	if [ -n "$kcptun_content" ]; then
 		local remote_tag=""
-		remote_tag="$(echo "$kcptun_content" | grep -oE '"tag_name"[[:space:]]*:[[:space:]]*"[^"]+"' | head -n 1 | sed 's/.*"\([^"]*\)"$/\1/')"
+		remote_tag="$(printf '%s' "$kcptun_content" | grep -oE '"tag_name"[[:space:]]*:[[:space:]]*"[^"]+"' | head -n 1 | sed 's/.*"\([^"]*\)"$/\1/')"
 		local local_tag=""
 		local remote_tag_normalized=""
 		local_tag="$(normalize_kcptun_tag "$(get_installed_version)")"
@@ -3395,7 +3471,8 @@ update_kcptun_component() {
 	echo "开始获取 Kcptun 版本信息..."
 	if ! get_kcptun_version_info "" false; then
 		cat >&2 <<-EOF
-		获取 Kcptun 版本信息失败，请检查网络后重试。
+		获取 Kcptun 版本信息失败: ${kcptun_version_error}
+		请检查网络后重试。
 		EOF
 		return 1
 	fi
@@ -3453,6 +3530,8 @@ do_update_menu() {
 			else
 				kcptun_status="${cur_tag_name} (已是最新)"
 			fi
+		else
+			kcptun_status="获取失败（${kcptun_version_error}）"
 		fi
 
 		cat >&1 <<-EOF
