@@ -6,38 +6,36 @@ Kcptun 服务端一键安装/管理脚本（2026 版）。基于 KCP 协议，�
 
 ## 功能特性
 
-- **一键安装**：自动下载 Kcptun 服务端（支持 32/64 位系统），校验文件哈希，安装依赖（wget/gawk/tar/python/pip/jq）
+- **一键安装**：自动下载 Kcptun 服务端（支持 amd64 / x86 / arm64 / arm），使用 Release 的 `checksums.txt` 校验 SHA256，依赖仅需 wget/curl、gawk 与 jq
 - **交互式配置**：引导式设置运行端口、加速地址、加密方式、加速模式等全部参数，均有默认值，一路回车即可完成部署
 - **多实例管理**：支持添加、删除、重新配置多个 Kcptun 实例，实现多端口同时加速
-- **Supervisor 守护**：自动通过 pip 安装 Supervisor 并配置开机自启，进程崩溃自动拉起
+- **systemd 原生托管**：自动生成 systemd unit（SysVinit 环境下生成 init 脚本），支持开机自启与崩溃自动拉起，不再依赖 Python 与 Supervisor
 - **自动防火墙配置**：自动检测 firewalld / iptables 并放行 UDP 监听端口
-- **一键更新**：脚本自身、配置模板、服务启动文件、Kcptun 主程序均可在线检查更新，并展示更新日志
+- **一键更新**：脚本自身、配置模板、服务文件、Kcptun 主程序均可在线检查更新，并展示更新日志
 - **自定义版本安装**：可指定任意 TAG 安装历史版本（不支持 v20160826 及更早版本）
 - **客户端配置生成**：安装完成后自动输出服务端配置、对应的客户端 JSON 配置以及手机端参数字符串
+- **下载加速**：支持 `GITHUB_PROXY` / `KCPTUN_RELEASES_API` / `KCPTUN_SCRIPT_BASE_URL` 环境变量，便于国内服务器接入镜像或反向代理
 - **安全加固**：自动禁用 SELinux，默认以非 root 的 `kcptun` 用户运行服务（使用低端口或 TCP 模式时自动切换为 root）
 
 ## 目录结构
 
 ```sh
 $ tree
-├── kcptun
-│   └── kcptun.sh # kcptun 一键安装脚本
-└── ovz-bbr
-    └── ovz-bbr-installer.sh # OpenVZ BBR 一键安装脚本
+├── kcptun.sh      # kcptun 一键安装/管理脚本
+└── version.json   # 脚本自更新版本信息
 ```
 
 ## Kcptun 一键安装脚本
 
 * Ubuntu：
 ```sh
-apt install python-is-python3 -y
-wget --no-check-certificate -O kcptun.sh https://github.com/tobycroft/shell-scripts/raw/master/kcptun/kcptun.sh
+wget --no-check-certificate -O kcptun.sh https://github.com/TuuzNet/kcptun-script/raw/main/kcptun.sh
 sh kcptun.sh
 ```
 
 * 其他 Linux 安装命令：
 ```sh
-wget --no-check-certificate -O kcptun.sh https://github.com/tobycroft/shell-scripts/raw/master/kcptun/kcptun.sh
+wget --no-check-certificate -O kcptun.sh https://github.com/TuuzNet/kcptun-script/raw/main/kcptun.sh
 sh kcptun.sh
 ```
 
@@ -46,10 +44,24 @@ sh kcptun.sh
 ### 系统要求
 
 - **支持的系统**：Ubuntu / Debian / Raspbian / CentOS / Fedora / RedHat / OracleLinux / Photon
-- **支持的架构**：x86（386）/ x86_64（amd64）
+- **支持的架构**：x86_64（amd64）/ x86（386）/ arm64（aarch64）/ arm（armv6/armv7/armv5）
 - **需要 root 权限**运行
-- **服务管理**：需存在 `systemctl` 或 `service` 命令
-- **Python**：2.6 及以上（Python 2.6 会自动安装 supervisor 3.x，建议升级至 ≥ 2.7.9 或 ≥ 3.4）
+- **服务管理**：`systemd`（优先）或 `SysVinit`（需存在 `service` 命令）
+- **无需 Python**：服务由 systemd/SysVinit 直接托管
+
+### 下载加速（可选）
+
+安装脚本默认直连 GitHub，国内服务器可通过环境变量接入镜像：
+
+```sh
+# 为 github.com 下载地址增加加速前缀（示例）
+GITHUB_PROXY='https://ghfast.top/' sh kcptun.sh
+
+# 或直接指定 API 与脚本源
+KCPTUN_RELEASES_API='https://your-mirror/api/repos/tobycroft/kcptun/releases' \
+KCPTUN_SCRIPT_BASE_URL='https://your-mirror/kcptun-script/raw/main' \
+sh kcptun.sh
+```
 
 ### 命令行参数
 
@@ -76,12 +88,12 @@ sh kcptun.sh
     可使用 1, 2, 3 ... 分别对应实例 kcptun, kcptun2, kcptun3 ...
     若不指定 <id>, 则默认为 1
 
-Supervisor 命令:
-    service supervisord {start|stop|restart|status}
-                        {启动|关闭|重启|查看状态}
-Kcptun 相关命令:
-    supervisorctl {start|stop|restart|status} kcptun<id>
-                  {启动|关闭|重启|查看状态}
+Kcptun 服务管理命令 (systemd):
+    systemctl {start|stop|restart|status} kcptun<id>
+    systemctl {enable|disable} kcptun<id>
+
+Kcptun 服务管理命令 (SysVinit):
+    service kcptun<id> {start|stop|restart|status}
 ```
 
 ### 交互式配置项
@@ -126,7 +138,7 @@ Kcptun 相关命令:
 | `/usr/local/kcptun/server-config<id>.json` | 各实例服务端配置文件 |
 | `/var/log/kcptun/server<id>.log` | 各实例运行日志 |
 | `/var/log/kcptun/snmplog<id>.log` | SNMP 日志（可选） |
-| `/etc/supervisor/conf.d/kcptun<id>.conf` | 各实例 Supervisor 配置文件 |
+| `/etc/systemd/system/kcptun<id>.service` | 各实例 systemd unit（SysVinit 下为 `/etc/init.d/kcptun<id>`） |
 
 > 若检测到旧版安装目录 `/usr/share/kcptun`，脚本会自动将文件迁移至 `/usr/local/kcptun`。
 
@@ -160,7 +172,8 @@ Kcptun 相关命令:
 
 - **端口占用**：配置的监听端口若已被占用会提示重新输入
 - **低端口运行**：监听端口 ≤ 1024 时，服务自动以 root 用户运行
-- **Supervisor 冲突**：若曾通过其他方式安装过 Supervisor（存在 `/etc/supervisord.conf`），脚本会提示先备份并卸载原有版本，避免冲突
+- **旧版 Supervisor 迁移**：从 v26 及更早版本升级时，脚本会提示停止并移除 `/etc/supervisor/conf.d/kcptun*.conf`，避免同一端口重复启动
+- **jq 安装失败**：优先尝试发行版软件包；仍失败时会下载 jq 1.7.1 静态二进制到 `/usr/local/kcptun/bin/jq`
+- **下载失败**：可设置 `GITHUB_PROXY` 或 `KCPTUN_RELEASES_API` 使用镜像；脚本同样会自动重试 3 次
 - **防火墙**：脚本会自动添加 firewalld / iptables 的 UDP 端口放行规则，失败时会输出手动添加命令
-- **pip 安装失败**：可参考脚本提示，通过 `apt`/`yum`/`get-pip.py` 手动安装 python-pip 后重新运行
 - **版本回退**：使用 `sh kcptun.sh manual` 输入完整 TAG（如 `v20160904`）即可安装指定历史版本

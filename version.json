@@ -1,0 +1,9 @@
+{
+	"shell_version": 27,
+	"shell_url": "https://github.com/TuuzNet/kcptun-script/raw/main/kcptun.sh",
+	"change_log": "1. 移除 Supervisor，改用 systemd / SysVinit 托管服务;\n2. jq 优先使用系统软件包，缺失时下载官方 1.7.1 二进制;\n3. 支持 arm64 / arm 架构;\n4. 支持 GITHUB_PROXY 加速下载;\n5. 使用 Release 的 checksums.txt 校验服务端二进制",
+	"config_version": 7,
+	"config_change_log": "1. 配置文件格式无变化",
+	"init_version": 4,
+	"init_change_log": "1. 服务管理方式由 Supervisor 改为 systemd unit / SysVinit 脚本;\n2. 旧版 Supervisor 实例会在安装时提示迁移"
+}

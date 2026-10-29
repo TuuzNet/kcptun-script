@@ -8,30 +8,53 @@ export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
 # 版本信息，请勿修改
 # =================
-SHELL_VERSION=26
+SHELL_VERSION=27
 CONFIG_VERSION=7
-INIT_VERSION=3
+INIT_VERSION=4
 # =================
 
 KCPTUN_INSTALL_DIR='/usr/local/kcptun'
 KCPTUN_LOG_DIR='/var/log/kcptun'
-KCPTUN_RELEASES_URL='https://api.github.com/repos/tobycroft/kcptun/releases'
-KCPTUN_LATEST_RELEASE_URL="${KCPTUN_RELEASES_URL}/latest"
-KCPTUN_TAGS_URL='https://github.com/tobycroft/kcptun/tags'
 
-BASE_URL='https://github.com/tobycroft/shell-scripts/raw/master/kcptun'
+# 项目仓库地址，发布到其他账号或组织时只需修改这两个变量
+SCRIPT_REPOSITORY="${SCRIPT_REPOSITORY:-TuuzNet/kcptun-script}"
+SCRIPT_BRANCH="${SCRIPT_BRANCH:-main}"
+KCPTUN_REPOSITORY="${KCPTUN_REPOSITORY:-tobycroft/kcptun}"
+
+# 以下变量均可用环境变量覆盖，便于接入镜像或自建反向代理
+KCPTUN_RELEASES_API="${KCPTUN_RELEASES_API:-https://api.github.com/repos/${KCPTUN_REPOSITORY}/releases}"
+KCPTUN_LATEST_RELEASE_URL="${KCPTUN_RELEASES_API}/latest"
+KCPTUN_TAGS_URL="${KCPTUN_TAGS_URL:-https://github.com/${KCPTUN_REPOSITORY}/tags}"
+
+# GitHub 下载加速前缀，例如 https://ghfast.top/ ；留空表示直连 github.com
+GITHUB_PROXY="${GITHUB_PROXY:-}"
+
+# 脚本自身与 version.json 的下载地址
+BASE_URL="${KCPTUN_SCRIPT_BASE_URL:-https://github.com/${SCRIPT_REPOSITORY}/raw/${SCRIPT_BRANCH}}"
 SHELL_VERSION_INFO_URL="${BASE_URL}/version.json"
 
-JQ_DOWNLOAD_URL="https://github.com/stedolan/jq/releases/download/jq-1.5/"
-JQ_LINUX32_URL="${JQ_DOWNLOAD_URL}/jq-linux32"
-JQ_LINUX64_URL="${JQ_DOWNLOAD_URL}/jq-linux64"
-JQ_LINUX32_HASH='ab440affb9e3f546cf0d794c0058543eeac920b0cd5dff660a2948b970beb632'
-JQ_LINUX64_HASH='c6b3a7d7d3e7b70c6f51b706a3b90bd01833846c54d32ca32f0027f00226ff6d'
+# jq 仅在系统未安装时才会下载，版本 1.7.1
+JQ_DOWNLOAD_URL='https://github.com/jqlang/jq/releases/download/jq-1.7.1'
+JQ_LINUX64_URL="${JQ_DOWNLOAD_URL}/jq-linux-amd64"
+JQ_LINUX64_HASH='5942c9b0934e510ee61eb3e30273f1b3fe2590df93933a93d7c58b81d19c8ff5'
+JQ_LINUX32_URL="${JQ_DOWNLOAD_URL}/jq-linux-i386"
+JQ_LINUX32_HASH='bc473fd4b385789e9ce3d02a4c8df74dc988a34b20fe4e1a80da997eb360b599'
+JQ_LINUX_ARM64_URL="${JQ_DOWNLOAD_URL}/jq-linux-arm64"
+JQ_LINUX_ARM64_HASH='4dd2d8a0661df0b22f1bb9a1f9830f06b6f3b8f7d91211a1ef5d7c4f06a8b4a5'
+JQ_LINUX_ARMHF_URL="${JQ_DOWNLOAD_URL}/jq-linux-armhf"
+JQ_LINUX_ARMHF_HASH='46d18f115cca638efed22b90342d52a84a25ab1bef570551d3a16f7eb065c298'
+JQ_LINUX_ARMEL_URL="${JQ_DOWNLOAD_URL}/jq-linux-armel"
+JQ_LINUX_ARMEL_HASH='d6b86023e0848c93a618a74b6fd741ce62f5d557fd3c2c1d7870663713b2c174'
 JQ_BIN="${KCPTUN_INSTALL_DIR}/bin/jq"
+JQ_LOCAL_BIN="$JQ_BIN"
 
-SUPERVISOR_SERVICE_FILE_DEBIAN_URL="${BASE_URL}/startup/supervisord.init.debain"
-SUPERVISOR_SERVICE_FILE_REDHAT_URL="${BASE_URL}/startup/supervisord.init.redhat"
-SUPERVISOR_SYSTEMD_FILE_URL="${BASE_URL}/startup/supervisord.systemd"
+# 服务管理相关路径
+SYSTEMD_UNIT_DIR='/etc/systemd/system'
+SYSV_INIT_DIR='/etc/init.d'
+SERVICE_BACKEND=''
+
+# 旧版由 Supervisor 托管，仅用于升级提示
+LEGACY_SUPERVISOR_DIR='/etc/supervisor/conf.d'
 
 # 默认参数
 # =======================
@@ -104,12 +127,12 @@ usage() {
 	    可使用 1, 2, 3 ... 分别对应实例 kcptun, kcptun2, kcptun3 ...
 	    若不指定 <id>, 则默认为 1
 
-	Supervisor 命令:
-	    service supervisord {start|stop|restart|status}
-	                        {启动|关闭|重启|查看状态}
-	Kcptun 相关命令:
-	    supervisorctl {start|stop|restart|status} kcptun<id>
-	                  {启动|关闭|重启|查看状态}
+	Kcptun 服务管理命令 (systemd):
+	    systemctl {start|stop|restart|status} kcptun<id>
+	    systemctl {enable|disable} kcptun<id>
+
+	Kcptun 服务管理命令 (SysVinit):
+	    service kcptun<id> {start|stop|restart|status}
 	EOF
 
 	exit $1
@@ -174,7 +197,7 @@ get_server_ip() {
 
 	# 自动获取失败时，通过网站提供的 API 获取外网地址
 	if [ -z "$server_ip" ]; then
-		 server_ip="$(wget -qO- --no-check-certificate https://ipv4.icanhazip.com)"
+		server_ip="$(https_get 'https://ipv4.icanhazip.com' | tr -d '[:space:]')"
 	fi
 
 	echo "$server_ip"
@@ -275,26 +298,87 @@ get_os_info() {
 	fi
 }
 
-# 获取服务器架构和 Kcptun 服务端文件后缀名
+# 获取服务器架构，同时确定 Kcptun 与 jq 的下载文件
+# 结果写入 file_suffix / jq_url / jq_hash
 get_arch() {
 	architecture="$(uname -m)"
 	case "$architecture" in
 		amd64|x86_64)
-			spruce_type='linux-amd64'
 			file_suffix='linux_amd64'
+			jq_url="$JQ_LINUX64_URL"
+			jq_hash="$JQ_LINUX64_HASH"
 			;;
 		i386|i486|i586|i686|x86)
-			spruce_type='linux-386'
 			file_suffix='linux_386'
+			jq_url="$JQ_LINUX32_URL"
+			jq_hash="$JQ_LINUX32_HASH"
+			;;
+		aarch64|arm64)
+			file_suffix='linux_arm64'
+			jq_url="$JQ_LINUX_ARM64_URL"
+			jq_hash="$JQ_LINUX_ARM64_HASH"
+			;;
+		armv7l|armv7|armv6l|armv6|arm)
+			file_suffix='linux_arm'
+			jq_url="$JQ_LINUX_ARMHF_URL"
+			jq_hash="$JQ_LINUX_ARMHF_HASH"
+			;;
+		armv5tel|armv5l|armv5)
+			file_suffix='linux_arm'
+			jq_url="$JQ_LINUX_ARMEL_URL"
+			jq_hash="$JQ_LINUX_ARMEL_HASH"
 			;;
 		*)
 			cat 1>&2 <<-EOF
-			当前脚本仅支持 32 位 和 64 位系统
+			当前脚本支持 amd64 / x86 / arm64 / arm 架构
 			你的系统为: $architecture
 			EOF
 			exit 1
 			;;
 	esac
+}
+
+# 为 github.com 下载地址拼接加速前缀
+url_with_proxy() {
+	case "$1" in
+		https://github.com/*)
+			if [ -n "$GITHUB_PROXY" ]; then
+				printf '%s%s' "$(printf '%s' "$GITHUB_PROXY" | sed 's:/*$::')/" "$1"
+				return 0
+			fi
+			;;
+	esac
+
+	printf '%s' "$1"
+}
+
+# 输出 URL 内容，优先 wget，缺失时回退 curl
+https_get() {
+	local url=""
+	url="$(url_with_proxy "$1")"
+
+	if command_exists wget; then
+		wget -qO- --no-check-certificate "$url"
+	elif command_exists curl; then
+		curl -fsSL --insecure "$url"
+	else
+		return 1
+	fi
+}
+
+# 下载文件，优先 wget，缺失时回退 curl
+https_download() {
+	local url=""
+	url="$(url_with_proxy "$1")"
+	local file="$2"
+
+	if command_exists wget; then
+		wget -O "$file" --no-check-certificate "$url"
+	elif command_exists curl; then
+		curl -fsSL --insecure -o "$file" "$url"
+	else
+		return 1
+	fi
 }
 
 # 获取 API 内容
@@ -308,14 +392,14 @@ get_content() {
 			cat >&2 <<-EOF
 			获取网络信息失败!
 			URL: ${url}
-			安装脚本需要能访问到 github.com，请检查服务器网络。
-			注意: 一些国内服务器可能无法正常访问 github.com。
+			安装脚本需要能访问 GitHub，请检查服务器网络。
+			国内服务器可设置 GITHUB_PROXY 或 KCPTUN_RELEASES_API 使用镜像。
 			EOF
 			exit 1
 		fi
 
 		# 将所有的换行符替换为自定义标签，防止 jq 解析失败
-		content="$(wget -qO- --no-check-certificate "$url" | sed -r 's/(\\r)?\\n/#br#/g')"
+		content="$(https_get "$url" | sed -r 's/(\\r)?\\n/#br#/g')"
 
 		if [ "$?" != "0" ] || [ -z "$content" ]; then
 			retry=$(expr $retry + 1)
@@ -348,7 +432,12 @@ download_file() {
 			fi
 
 			if [ -n "$verify_cmd" ] && ! command_exists "$verify_cmd"; then
-				verify_cmd=""
+				if [ "$verify_cmd" = "sha256sum" ] && command_exists shasum; then
+					# macOS 等系统只有 shasum
+					verify_cmd="shasum -a 256"
+				else
+					verify_cmd=""
+				fi
 			fi
 		fi
 
@@ -389,7 +478,7 @@ download_file() {
 			exit 1
 		fi
 
-		( set -x; wget -O "$file" --no-check-certificate "$url" )
+		( set -x; https_download "$url" "$file" )
 		if [ "$?" != "0" ] || [ -n "$verify_cmd" ] && ! verify_file; then
 			retry=$(expr $retry + 1)
 			download_file_to_path
@@ -400,11 +489,17 @@ download_file() {
 }
 
 # 安装 jq 用于解析和生成 json 文件
-# jq 已进入大部分 Linux 发行版的软件仓库，
-#  	URL: https://stedolan.github.io/jq/download/
-# 但为了防止有些系统安装失败，还是通过脚本来提供了。
+# 优先使用发行版仓库中的 jq，无法安装时再下载官方静态二进制
 install_jq() {
 	check_jq() {
+		if command_exists jq && ( jq --version >/dev/null 2>&1 ); then
+			JQ_BIN="$(command -v jq)"
+			is_checked_jq="true"
+			return 0
+		fi
+
+		JQ_BIN="$JQ_LOCAL_BIN"
+
 		if [ ! -f "$JQ_BIN" ]; then
 			return 1
 		fi
@@ -420,34 +515,53 @@ install_jq() {
 		fi
 	}
 
-	if [ -z "$is_checked_jq" ] && ! check_jq; then
-		local dir=""
-		dir="$(dirname "$JQ_BIN")"
-		if [ ! -d "$dir" ]; then
-			(
-				set -x
-				mkdir -p "$dir"
-			)
+	install_jq_from_package() {
+		if [ -z "$lsb_dist" ]; then
+			get_os_info
 		fi
 
-		if [ -z "$architecture" ]; then
-			get_arch
-		fi
-
-		case "$architecture" in
-			amd64|x86_64)
-				download_file "$JQ_LINUX64_URL" "$JQ_BIN" "$JQ_LINUX64_HASH"
+		case "$lsb_dist" in
+			ubuntu|debian|raspbian)
+				( set -x; apt-get update ) >/dev/null 2>&1
+				( set -x; apt-get install -y -q jq ) >/dev/null 2>&1 || true
 				;;
-			i386|i486|i586|i686|x86)
-				download_file "$JQ_LINUX32_URL" "$JQ_BIN" "$JQ_LINUX32_HASH"
+			fedora|centos|redhat|oraclelinux|photon)
+				if [ "$lsb_dist" = "fedora" ] && is_number "$dist_version" && [ "$dist_version" -ge "22" ]; then
+					( set -x; dnf -y -q install jq ) >/dev/null 2>&1 || true
+				elif [ "$lsb_dist" = "photon" ]; then
+					( set -x; tdnf -y install jq ) >/dev/null 2>&1 || true
+				else
+					( set -x; yum -y -q install jq ) >/dev/null 2>&1 || true
+				fi
 				;;
 		esac
+	}
+
+	if [ -z "$is_checked_jq" ] && ! check_jq; then
+		install_jq_from_package
 
 		if ! check_jq; then
-			cat >&2 <<-EOF
-			未找到适用于当前系统的 JSON 解析软件 jq
-			EOF
-			exit 1
+			if [ -z "$file_suffix" ]; then
+				get_arch
+			fi
+
+			local dir=""
+			dir="$(dirname "$JQ_BIN")"
+			if [ ! -d "$dir" ]; then
+				(
+					set -x
+					mkdir -p "$dir"
+				)
+			fi
+
+			download_file "$jq_url" "$JQ_BIN" "$jq_hash"
+
+			if ! check_jq; then
+				cat >&2 <<-EOF
+				未找到适用于当前系统的 JSON 解析软件 jq
+				EOF
+				exit 1
+			fi
 		fi
 
 		return 0
@@ -473,11 +587,11 @@ get_json_string() {
 	echo "$str"
 }
 
-# 获取当前实例的配置文件路径，传入参数：
+# 获取当前实例的文件路径，传入参数：
 # * config: kcptun 服务端配置文件
 # * log: kcptun 日志文件路径
 # * snmp: kcptun snmp 日志文件路径
-# * supervisor: 实例的 supervisor 文件路径
+# * service: 实例的服务文件路径（systemd unit 或 init 脚本）
 get_current_file() {
 	case "$1" in
 		config)
@@ -489,18 +603,130 @@ get_current_file() {
 		snmp)
 			printf '%s/snmplog%s.log' "$KCPTUN_LOG_DIR" "$current_instance_id"
 			;;
-		supervisor)
-			printf '/etc/supervisor/conf.d/kcptun%s.conf' "$current_instance_id"
+		service)
+			get_service_file_path "$current_instance_id"
 			;;
 	esac
 }
 
+# 检测服务管理方式，结果写入 SERVICE_BACKEND
+detect_service_backend() {
+	if [ -n "$SERVICE_BACKEND" ]; then
+		return 0
+	fi
+
+	if command_exists systemctl && [ -d '/run/systemd/system' ]; then
+		SERVICE_BACKEND='systemd'
+	elif command_exists service; then
+		SERVICE_BACKEND='sysvinit'
+	else
+		cat >&2 <<-'EOF'
+		当前服务器未检测到 systemd 或 service 命令，无法配置服务。
+		请先手动安装 systemd 或 SysVinit 之后再运行脚本。
+		EOF
+		exit 1
+	fi
+}
+
+# 获取实例的服务文件路径，实例 ID 为空表示第一个实例
+get_service_file_path() {
+	detect_service_backend
+
+	if [ "$SERVICE_BACKEND" = 'systemd' ]; then
+		printf '%s/kcptun%s.service' "$SYSTEMD_UNIT_DIR" "$1"
+	else
+		printf '%s/kcptun%s' "$SYSV_INIT_DIR" "$1"
+	fi
+}
+
+# 列出所有实例的服务文件名（按最后修改时间排序）
+list_instance_files() {
+	detect_service_backend
+
+	if [ "$SERVICE_BACKEND" = 'systemd' ]; then
+		ls -lt "$SYSTEMD_UNIT_DIR" 2>/dev/null | grep "^-" | awk '{print $9}' | grep -E "^kcptun[0-9]*\.service$"
+	else
+		ls -lt "$SYSV_INIT_DIR" 2>/dev/null | grep "^-" | awk '{print $9}' | grep -E "^kcptun[0-9]*$"
+	fi
+}
+
 # 获取实例数量
 get_instance_count() {
-	if [ -d '/etc/supervisor/conf.d/' ]; then
-		ls -l '/etc/supervisor/conf.d/' | grep "^-" | awk '{print $9}' | grep -cP "^kcptun\d*\.conf$"
+	list_instance_files | wc -l | tr -d ' '
+}
+
+# 重新加载服务管理器配置
+reload_service_manager() {
+	detect_service_backend
+
+	if [ "$SERVICE_BACKEND" = 'systemd' ]; then
+		systemctl daemon-reload >/dev/null 2>&1
+	fi
+}
+
+# 启动实例
+start_instance_service() {
+	local instance_id="$1"
+	detect_service_backend
+
+	if [ "$SERVICE_BACKEND" = 'systemd' ]; then
+		systemctl start "kcptun${instance_id}.service"
 	else
-		echo "0"
+		service "kcptun${instance_id}" start
+	fi
+}
+
+# 停止实例
+stop_instance_service() {
+	local instance_id="$1"
+	detect_service_backend
+
+	if [ "$SERVICE_BACKEND" = 'systemd' ]; then
+		systemctl stop "kcptun${instance_id}.service" >/dev/null 2>&1
+	else
+		service "kcptun${instance_id}" stop >/dev/null 2>&1
+	fi
+}
+
+# 重启实例
+restart_instance_service() {
+	local instance_id="$1"
+	detect_service_backend
+
+	if [ "$SERVICE_BACKEND" = 'systemd' ]; then
+		systemctl restart "kcptun${instance_id}.service"
+	else
+		service "kcptun${instance_id}" restart
+	fi
+}
+
+# 设置实例开机自启
+enable_instance_service() {
+	local instance_id="$1"
+	detect_service_backend
+
+	if [ "$SERVICE_BACKEND" = 'systemd' ]; then
+		systemctl enable "kcptun${instance_id}.service" >/dev/null 2>&1
+	elif command_exists chkconfig; then
+		chkconfig --add "kcptun${instance_id}" >/dev/null 2>&1
+		chkconfig "kcptun${instance_id}" on >/dev/null 2>&1
+	elif command_exists update-rc.d; then
+		update-rc.d "kcptun${instance_id}" defaults >/dev/null 2>&1
+	fi
+}
+
+# 取消实例开机自启
+disable_instance_service() {
+	local instance_id="$1"
+	detect_service_backend
+
+	if [ "$SERVICE_BACKEND" = 'systemd' ]; then
+		systemctl disable "kcptun${instance_id}.service" >/dev/null 2>&1
+	elif command_exists chkconfig; then
+		chkconfig "kcptun${instance_id}" off >/dev/null 2>&1
+		chkconfig --del "kcptun${instance_id}" >/dev/null 2>&1
+	elif command_exists update-rc.d; then
+		update-rc.d -f "kcptun${instance_id}" remove >/dev/null 2>&1
 	fi
 }
 
@@ -512,7 +738,7 @@ get_kcptun_version_info() {
 	local version_content=""
 	if [ -n "$request_version" ]; then
 		local json_content=""
-		json_content="$(get_content "$KCPTUN_RELEASES_URL")"
+		json_content="$(get_content "${KCPTUN_RELEASES_API}?per_page=100")"
 		local version_selector=".[] | select(.tag_name == \"${request_version}\")"
 		version_content="$(get_json_string "$json_content" "$version_selector")"
 	else
@@ -523,16 +749,20 @@ get_kcptun_version_info() {
 		return 1
 	fi
 
-	if [ -z "$spruce_type" ]; then
+	if [ -z "$file_suffix" ]; then
 		get_arch
 	fi
 
-	local url_selector=".assets[] | select(.name | contains(\"${spruce_type}\")) | .browser_download_url"
+	local server_asset="server_${file_suffix}"
+	local url_selector=".assets[] | select(.name == \"${server_asset}\") | .browser_download_url"
 	kcptun_release_download_url="$(get_json_string "$version_content" "$url_selector")"
 
 	if [ -z "$kcptun_release_download_url" ]; then
 		return 1
 	fi
+
+	local checksums_selector=".assets[] | select(.name == \"checksums.txt\") | .browser_download_url"
+	kcptun_release_checksums_url="$(get_json_string "$version_content" "$checksums_selector")"
 
 	kcptun_release_tag_name="$(get_json_string "$version_content" '.tag_name')"
 	kcptun_release_name="$(get_json_string "$version_content" '.name')"
@@ -541,32 +771,31 @@ get_kcptun_version_info() {
 	kcptun_release_html_url="$(get_json_string "$version_content" '.html_url')"
 
 	local body_content="$(get_json_string "$version_content" '.body')"
-	local body="$(echo "$body_content" | sed 's/#br#/\n/g' | grep -vE '(^```)|(^>)|(^[[:space:]]*$)|(SUM$)')"
+	local body="$(echo "$body_content" | sed 's/#br#/\n/g' | grep -vE '(^```)|(^>)|(^[[:space:]]*$)')"
 
+	# 更新说明中去掉长串哈希，避免刷屏
 	kcptun_release_body="$(echo "$body" | grep -vE "[0-9a-zA-Z]{32,}")"
 
-	local file_verify=""
-	file_verify="$(echo "$body" | grep "$spruce_type")"
+	return 0
+}
 
-	if [ -n "$file_verify" ]; then
-		local i="1"
-		local split=""
-		while true
-		do
-			split="$(echo "$file_verify" | cut -d ' ' -f$i)"
+# 从 Release 的 checksums.txt 中查询目标文件的 SHA256
+get_kcptun_checksum() {
+	local asset_name="$1"
+	local checksum_content=""
 
-			if [ -n "$split" ] && ( echo "$split" | grep -qE "^[0-9a-zA-Z]{32,}$" ); then
-				kcptun_release_verify="$split"
-				break
-			elif [ -z "$split" ]; then
-				break
-			fi
-
-			i=$(expr $i + 1)
-		done
+	if [ -z "$kcptun_release_checksums_url" ]; then
+		return 0
 	fi
 
-	return 0
+	checksum_content="$(https_get "$kcptun_release_checksums_url")"
+	if [ -z "$checksum_content" ]; then
+		return 0
+	fi
+
+	echo "$checksum_content" | \
+		awk -v plain="$asset_name" -v prefixed="./$asset_name" \
+			'$2 == plain || $2 == prefixed { print $1; exit }'
 }
 
 # 获取脚本版本信息
@@ -600,7 +829,7 @@ get_shell_version_info() {
 	return 0
 }
 
-# 下载并安装 Kcptun
+# 下载并安装 Kcptun 服务端
 install_kcptun() {
 	if [ -z "$kcptun_release_download_url" ]; then
 		get_kcptun_version_info "$1"
@@ -615,8 +844,9 @@ install_kcptun() {
 		fi
 	fi
 
-	local kcptun_file_name="kcptun-${kcptun_release_tag_name}.tar.gz"
-	download_file "$kcptun_release_download_url" "$kcptun_file_name" "$kcptun_release_verify"
+	if [ -z "$file_suffix" ]; then
+		get_arch
+	fi
 
 	if [ ! -d "$KCPTUN_INSTALL_DIR" ]; then
 		(
@@ -629,145 +859,107 @@ install_kcptun() {
 		(
 			set -x
 			mkdir -p "$KCPTUN_LOG_DIR"
-			chmod a+w "$KCPTUN_LOG_DIR"
 		)
 	fi
 
-	(
-		set -x
-		tar -zxf "$kcptun_file_name" -C "$KCPTUN_INSTALL_DIR"
-		sleep 3
-	)
+	# 允许非 root 运行用户写入日志
+	chmod a+w "$KCPTUN_LOG_DIR" 2>/dev/null || true
 
-	local kcptun_server_file=""
-	kcptun_server_file="$(get_kcptun_server_file)"
+	local server_asset="server_${file_suffix}"
+	local kcptun_server_file="${KCPTUN_INSTALL_DIR}/${server_asset}"
 
-	if [ ! -f "$kcptun_server_file" ]; then
-		cat >&2 <<-'EOF'
-		未在解压文件中找到 Kcptun 服务端执行文件!
-		通常这不会发生，可能的原因是 Kcptun 作者打包文件的时候更改了文件名。
+	local file_verify=""
+	file_verify="$(get_kcptun_checksum "$server_asset")"
+	if [ -z "$file_verify" ]; then
+		cat >&1 <<-EOF
+		警告: 未能获取 ${server_asset} 的校验值，将跳过完整性校验。
+		EOF
+	fi
+
+	# 先下载到临时文件再替换，避免覆盖运行中的二进制时报 Text file busy
+	local download_temp="${kcptun_server_file}.download"
+	download_file "$kcptun_release_download_url" "$download_temp" "$file_verify"
+
+	if [ ! -s "$download_temp" ]; then
+		cat >&2 <<-EOF
+		未找到下载的 Kcptun 服务端执行文件: ${kcptun_server_file}
 		你可以尝试重新安装，或者联系脚本作者。
 		EOF
 		exit 1
 	fi
 
-	chmod a+x "$kcptun_server_file"
+	(
+		set -x
+		mv -f "$download_temp" "$kcptun_server_file"
+		chmod a+x "$kcptun_server_file"
+	)
 
 	if [ -z "$(get_installed_version)" ]; then
 		cat >&2 <<-'EOF'
-		无法找到适合当前服务器的 kcptun 可执行文件
-		你可以尝试从源码编译。
+		无法运行当前服务器上的 kcptun 可执行文件
+		可能是不支持的架构，你可以尝试从源码编译。
 		EOF
 		exit 1
 	fi
 
-	rm -f "$kcptun_file_name" "${KCPTUN_INSTALL_DIR}/client_$file_suffix"
+	# 清理旧版本残留的客户端文件与压缩包
+	rm -f "${KCPTUN_INSTALL_DIR}/client_${file_suffix}" \
+		"${KCPTUN_INSTALL_DIR}/kcptun-"*.tar.gz 2>/dev/null || true
 }
 
-# 安装依赖软件
+# 安装基础依赖软件
+# 已不再依赖 python / pip / supervisor，仅保留下载与文本处理工具
 install_deps() {
 	if [ -z "$lsb_dist" ]; then
 		get_os_info
 	fi
 
+	did_apt_get_update=""
+	deps_failed=""
+
+	apt_get_update() {
+		if [ -z "$did_apt_get_update" ]; then
+			( set -x; sleep 3; apt-get update ) || deps_failed="true"
+			did_apt_get_update=1
+		fi
+	}
+
 	case "$lsb_dist" in
 		ubuntu|debian|raspbian)
-			local did_apt_get_update=""
-			apt_get_update() {
-				if [ -z "$did_apt_get_update" ]; then
-					( set -x; sleep 3; apt-get update )
-					did_apt_get_update=1
-				fi
-			}
-
-			if ! command_exists wget; then
+			if ! command_exists wget && ! command_exists curl; then
 				apt_get_update
-				( set -x; sleep 3; apt-get install -y -q wget ca-certificates )
+				( set -x; sleep 3; apt-get install -y -q wget ca-certificates ) || deps_failed="true"
 			fi
 
 			if ! command_exists awk; then
 				apt_get_update
-				( set -x; sleep 3; apt-get install -y -q gawk )
-			fi
-
-			if ! command_exists tar; then
-				apt_get_update
-				( set -x; sleep 3; apt-get install -y -q tar )
-			fi
-
-			if ! command_exists pip; then
-				apt_get_update
-				( set -x; sleep 3; apt-get install -y -q python-pip || true )
-			fi
-
-			if ! command_exists python; then
-				apt_get_update
-				( set -x; sleep 3; apt-get install -y -q python )
+				( set -x; sleep 3; apt-get install -y -q gawk ) || deps_failed="true"
 			fi
 			;;
 		fedora|centos|redhat|oraclelinux|photon)
-			if [ "$lsb_dist" = "fedora" ] && [ "$dist_version" -ge "22" ]; then
-				if ! command_exists wget; then
-					( set -x; sleep 3; dnf -y -q install wget ca-certificates )
+			if [ "$lsb_dist" = "fedora" ] && is_number "$dist_version" && [ "$dist_version" -ge "22" ]; then
+				if ! command_exists wget && ! command_exists curl; then
+					( set -x; sleep 3; dnf -y -q install wget ca-certificates ) || deps_failed="true"
 				fi
 
 				if ! command_exists awk; then
-					( set -x; sleep 3; dnf -y -q install gawk )
-				fi
-
-				if ! command_exists tar; then
-					( set -x; sleep 3; dnf -y -q install tar )
-				fi
-
-				if ! command_exists pip; then
-					( set -x; sleep 3; dnf -y -q install python-pip || true )
-				fi
-
-				if ! command_exists python; then
-					( set -x; sleep 3; dnf -y -q install python )
+					( set -x; sleep 3; dnf -y -q install gawk ) || deps_failed="true"
 				fi
 			elif [ "$lsb_dist" = "photon" ]; then
-				if ! command_exists wget; then
-					( set -x; sleep 3; tdnf -y install wget ca-certificates )
+				if ! command_exists wget && ! command_exists curl; then
+					( set -x; sleep 3; tdnf -y install wget ca-certificates ) || deps_failed="true"
 				fi
 
 				if ! command_exists awk; then
-					( set -x; sleep 3; tdnf -y install gawk )
-				fi
-
-				if ! command_exists tar; then
-					( set -x; sleep 3; tdnf -y install tar )
-				fi
-
-				if ! command_exists pip; then
-					( set -x; sleep 3; tdnf -y install python-pip || true )
-				fi
-
-				if ! command_exists python; then
-					( set -x; sleep 3; tdnf -y install python )
+					( set -x; sleep 3; tdnf -y install gawk ) || deps_failed="true"
 				fi
 			else
-				if ! command_exists wget; then
-					( set -x; sleep 3; yum -y -q install wget ca-certificates )
+				if ! command_exists wget && ! command_exists curl; then
+					( set -x; sleep 3; yum -y -q install wget ca-certificates ) || deps_failed="true"
 				fi
 
 				if ! command_exists awk; then
-					( set -x; sleep 3; yum -y -q install gawk )
-				fi
-
-				if ! command_exists tar; then
-					( set -x; sleep 3; yum -y -q install tar )
-				fi
-
-				# CentOS 等红帽系操作系统的软件库中可能不包括 python-pip
-				# 可以先安装 epel-release
-				if ! command_exists pip; then
-					( set -x; sleep 3; yum -y -q install python-pip || true )
-				fi
-
-				# 如果 python-pip 安装失败，检测是否已安装 python 环境
-				if ! command_exists python; then
-					( set -x; sleep 3; yum -y -q install python )
+					( set -x; sleep 3; yum -y -q install gawk ) || deps_failed="true"
 				fi
 			fi
 			;;
@@ -780,9 +972,7 @@ install_deps() {
 			;;
 	esac
 
-	# 这里判断了是否存在安装失败的软件包，但是默认不处理 python-pip 的安装失败，
-	# 接下来会统一检测并再次安装 pip 命令
-	if [ "$?" != 0 ]; then
+	if [ -n "$deps_failed" ]; then
 		cat >&2 <<-'EOF'
 		一些依赖软件安装失败，
 		请查看日志检查错误。
@@ -793,366 +983,258 @@ install_deps() {
 	install_jq
 }
 
-# 安装 supervisor
-install_supervisor() {
-	if [ -s /etc/supervisord.conf ] && command_exists supervisord; then
-		cat >&2 <<-EOF
-		检测到你曾经通过其他方式安装过 Supervisor , 这会和本脚本安装的 Supervisor 产生冲突
-		推荐你备份当前 Supervisor 配置后卸载原有版本
-		已安装的 Supervisor 配置文件路径为: /etc/supervisord.conf
-		通过本脚本安装的 Supervisor 配置文件路径为: /etc/supervisor/supervisord.conf
-		你可以使用以下命令来备份原有配置文件:
+# 配置服务管理器（systemd 或 SysVinit）
+install_service_manager() {
+	detect_service_backend
 
-		    mv /etc/supervisord.conf /etc/supervisord.conf.bak
+	if [ "$SERVICE_BACKEND" = 'systemd' ]; then
+		cat >&1 <<-'EOF'
+		检测到 systemd，将使用 systemd 托管 Kcptun 服务。
 		EOF
-
-		exit 1
-	fi
-
-	if ! command_exists python; then
-		cat >&2 <<-'EOF'
-		python 环境未安装，并且自动安装失败，请手动安装 python 环境。
-		EOF
-
-		exit 1
-	fi
-
-	local python_version="$(python -V 2>&1)"
-
-	if [ "$?" != "0" ] || [ -z "$python_version" ]; then
-		cat >&2 <<-'EOF'
-		python 环境已损坏，无法通过 python -V 来获取版本号。
-		请手动重装 python 环境。
-		EOF
-
-		exit 1
-	fi
-
-	local version_string="$(echo "$python_version" | cut -d' ' -f2 | head -n1)"
-	local major_version="$(echo "$version_string" | cut -d'.' -f1)"
-	local minor_version="$(echo "$version_string" | cut -d'.' -f2)"
-
-	if [ -z "$major_version" ] || [ -z "$minor_version" ] || \
-		! ( is_number "$major_version" ); then
-		cat >&2 <<-EOF
-		获取 python 大小版本号失败：${python_version}
-		EOF
-
-		exit 1
-	fi
-
-	local is_python_26="false"
-
-	if [ "$major_version" -lt "2" ] || ( \
-		[ "$major_version" = "2" ] && [ "$minor_version" -lt "6" ] ); then
-		cat >&2 <<-EOF
-		不支持的 python 版本 ${version_string}，当前仅支持 python 2.6 及以上版本的安装。
-		EOF
-
-		exit 1
-	elif [ "$major_version" = "2" ] && [ "$minor_version" = "6" ]; then
-		is_python_26="true"
-
-		cat >&1 <<-EOF
-		注意：当前服务器的 python 版本为 ${version_string},
-		脚本对 python 2.6 及以下版本的支持可能会失效，
-		请尽快升级 python 版本到 >= 2.7.9 或 >= 3.4。
-		EOF
-
-		any_key_to_continue
-	fi
-
-	if ! command_exists pip; then
-		# 如果没有监测到 pip 命令，但当前服务器已经安装 python
-		# 使用 get-pip.py 脚本来安装 pip 命令
-		if [ "$is_python_26" = "true" ]; then
-			(
-				set -x
-				wget -qO- --no-check-certificate https://bootstrap.pypa.io/2.6/get-pip.py | python
-			)
-		else
-			(
-				set -x
-				wget -qO- --no-check-certificate https://bootstrap.pypa.io/get-pip.py | python
-			)
-		fi
-	fi
-
-	# 如果使用脚本安装依然失败，提示手动安装
-	if ! command_exists pip; then
-		cat >&2 <<-EOF
-		未找到已安装的 pip 命令，请先手动安装 python-pip
-		本脚本自 v21 版开始使用 pip 来安装 Supervisior。
-
-		1. 对于 Debian 系的 Linux 系统，可以尝试使用：
-		  sudo apt-get install -y python-pip 来进行安装
-
-		2. 对于 Redhat 系的 Linux 系统，可以尝试使用：
-		  sudo yum install -y python-pip 来进行安装
-		  * 如果提示未找到，可以先尝试安装：epel-release 扩展软件库
-
-		3. 如果以上方法都失败了，请使用以下命令来手动安装：
-		  wget -qO- --no-check-certificate https://bootstrap.pypa.io/get-pip.py | python
-		  * python 2.6 的用户请使用：
-		    wget -qO- --no-check-certificate https://bootstrap.pypa.io/2.6/get-pip.py | python
-
-		4. pip 安装完毕之后，先运行一下更新命令：
-		  pip install --upgrade pip
-
-		  再检查一下 pip 的版本：
-		  pip -V
-
-		一切无误后，请重新运行安装脚本。
-		EOF
-		exit 1
-	fi
-
-	if ! ( pip --version >/dev/null 2>&1 ); then
-		cat >&2 <<-EOF
-		检测到当前环境的 pip 命令已损坏，
-		请检查你的 python 环境。
-		EOF
-
-		exit 1
-	fi
-
-	if [ "$is_python_26" != "true" ]; then
-		# 已安装 pip 时先尝试更新一下，
-		# 如果是 python 2.6，就不要更新了，更新会导致 pip 损坏
-		# pip 只支持 python 2 >= 2.7.9
-		# https://pip.pypa.io/en/stable/installing/
-		(
-			set -x
-			pip install --upgrade pip || true
-		)
-	fi
-
-	if [ "$is_python_26" = "true" ]; then
-		(
-			set -x
-			pip install 'supervisor>=3.0.0,<4.0.0'
-		)
 	else
+		cat >&1 <<-'EOF'
+		检测到 SysVinit，将为每个实例生成独立的 init 脚本。
+		EOF
+	fi
+
+	migrate_legacy_supervisor
+}
+
+# 检测并迁移旧版 Supervisor 托管的实例
+migrate_legacy_supervisor() {
+	if [ ! -d "$LEGACY_SUPERVISOR_DIR" ] || \
+		! ls "$LEGACY_SUPERVISOR_DIR"/kcptun*.conf >/dev/null 2>&1; then
+		return 0
+	fi
+
+	cat >&1 <<-EOF
+	检测到旧版由 Supervisor 托管的 Kcptun 实例:
+	  ${LEGACY_SUPERVISOR_DIR}/kcptun*.conf
+	新版本改用 ${SERVICE_BACKEND} 托管，继续安装前需要处理旧实例，
+	否则同一端口可能会启动两个进程。
+	EOF
+
+	local sel=""
+	read -p "(默认: 停止并移除旧配置) 请选择 [1]移除 [2]保留: " sel
+	case "$(first_character "$sel")" in
+		2)
+			return 0
+			;;
+	esac
+
+	local conf=""
+	local name=""
+	for conf in "$LEGACY_SUPERVISOR_DIR"/kcptun*.conf; do
+		name="$(basename "$conf" .conf)"
+		if command_exists supervisorctl; then
+			supervisorctl stop "$name" >/dev/null 2>&1 || true
+		fi
 		(
 			set -x
-			pip install --upgrade supervisor
+			rm -f "$conf"
 		)
+	done
+
+	if command_exists supervisorctl; then
+		supervisorctl update >/dev/null 2>&1 || true
+	fi
+}
+
+# 生成当前实例的服务文件
+gen_service_file() {
+	if [ -z "$SERVICE_BACKEND" ]; then
+		detect_service_backend
 	fi
 
-	if [ "$?" != "0" ]; then
-		cat >&2 <<-EOF
-		错误: 安装 Supervisor 失败，
-		请尝试使用
-		  pip install supervisor
-		来手动安装。
-		Supervisor 从 4.0 开始已不支持 python 2.6 及以下版本
-		python 2.6 的用户请使用：
-		  pip install 'supervisor>=3.0.0,<4.0.0'
-		EOF
-
-		exit 1
+	if [ "$SERVICE_BACKEND" = 'systemd' ]; then
+		gen_systemd_unit
+	else
+		gen_sysv_init
 	fi
+}
 
-	[ ! -d /etc/supervisor/conf.d ] && (
+# 生成 systemd unit 文件
+gen_systemd_unit() {
+	local unit_file=""
+	unit_file="$(get_service_file_path "$current_instance_id")"
+	local server_file=""
+	server_file="$(get_kcptun_server_file)"
+	local config_file=""
+	config_file="$(get_current_file 'config')"
+	local log_file=""
+	log_file="$(get_current_file 'log')"
+
+	cat > "$unit_file" <<-EOF
+	[Unit]
+	Description=Kcptun Server (kcptun${current_instance_id})
+	After=network-online.target
+	Wants=network-online.target
+
+	[Service]
+	Type=simple
+	User=${run_user}
+	WorkingDirectory=${KCPTUN_INSTALL_DIR}
+	ExecStart=/bin/sh -c 'exec ${server_file} -c ${config_file} >> ${log_file} 2>&1'
+	Restart=always
+	RestartSec=3
+	LimitNOFILE=1048576
+
+	[Install]
+	WantedBy=multi-user.target
+	EOF
+}
+
+# 生成 SysVinit init 脚本
+gen_sysv_init() {
+	local init_file=""
+	init_file="$(get_service_file_path "$current_instance_id")"
+	local server_file=""
+	server_file="$(get_kcptun_server_file)"
+	local config_file=""
+	config_file="$(get_current_file 'config')"
+	local log_file=""
+	log_file="$(get_current_file 'log')"
+	local pid_file="/var/run/kcptun${current_instance_id}.pid"
+
+	cat > "$init_file" <<-EOF
+	#!/bin/sh
+	### BEGIN INIT INFO
+	# Provides:          kcptun${current_instance_id}
+	# Required-Start:    \$network \$remote_fs
+	# Required-Stop:     \$network \$remote_fs
+	# Default-Start:     2 3 4 5
+	# Default-Stop:      0 1 6
+	# Short-Description: Kcptun Server (kcptun${current_instance_id})
+	### END INIT INFO
+
+	DAEMON="${server_file}"
+	CONFIG="${config_file}"
+	LOGFILE="${log_file}"
+	PIDFILE="${pid_file}"
+	RUN_USER="${run_user}"
+
+	is_running() {
+		[ -f "\$PIDFILE" ] && kill -0 "\$(cat "\$PIDFILE")" 2>/dev/null
+	}
+
+	start_daemon() {
+		nohup "\$DAEMON" -c "\$CONFIG" >> "\$LOGFILE" 2>&1 &
+		echo \$! > "\$PIDFILE"
+	}
+
+	start() {
+		if is_running; then
+			echo "kcptun${current_instance_id} is already running"
+			return 0
+		fi
+
+		: > "\$PIDFILE"
+		chown "\$RUN_USER" "\$PIDFILE" 2>/dev/null
+
+		if [ "\$RUN_USER" = "root" ]; then
+			start_daemon
+		else
+			su -s /bin/sh -c "\$0 __start_daemon" "\$RUN_USER"
+		fi
+	}
+
+	stop() {
+		if [ -f "\$PIDFILE" ]; then
+			kill "\$(cat "\$PIDFILE")" 2>/dev/null
+			rm -f "\$PIDFILE"
+		fi
+	}
+
+	status() {
+		if is_running; then
+			echo "kcptun${current_instance_id} is running"
+			return 0
+		fi
+		echo "kcptun${current_instance_id} is stopped"
+		return 3
+	}
+
+	case "\$1" in
+		start) start ;;
+		stop) stop ;;
+		restart) stop; sleep 1; start ;;
+		status) status ;;
+		__start_daemon) start_daemon ;;
+		*) echo "Usage: \$0 {start|stop|restart|status}"; exit 1 ;;
+	esac
+	EOF
+
+	(
 		set -x
-		mkdir -p /etc/supervisor/conf.d
+		chmod a+x "$init_file"
 	)
-
-	if [ ! -f '/usr/local/bin/supervisord' ]; then
-		(
-			set -x
-			ln -s "$(command -v supervisord)" '/usr/local/bin/supervisord' 2>/dev/null
-		)
-	fi
-
-	if [ ! -f '/usr/local/bin/supervisorctl' ]; then
-		(
-			set -x
-			ln -s "$(command -v supervisorctl)" '/usr/local/bin/supervisorctl' 2>/dev/null
-		)
-	fi
-
-	if [ ! -f '/usr/local/bin/pidproxy' ]; then
-		(
-			set -x
-			ln -s "$(command -v pidproxy)" '/usr/local/bin/pidproxy' 2>/dev/null
-		)
-	fi
-
-	local cfg_file='/etc/supervisor/supervisord.conf'
-
-	local rvt="0"
-
-	if [ ! -s "$cfg_file" ]; then
-		if ! command_exists echo_supervisord_conf; then
-			cat >&2 <<-'EOF'
-			未找到 echo_supervisord_conf, 无法自动创建 Supervisor 配置文件!
-			可能是当前安装的 supervisor 版本过低。
-			EOF
-			exit 1
-		fi
-
-		(
-			set -x
-			echo_supervisord_conf >"$cfg_file" 2>&1
-		)
-		rvt="$?"
-	fi
-
-	local cfg_content="$(cat "$cfg_file")"
-
-	# Error with supervisor config file
-	if ( echo "$cfg_content" | grep -q "Traceback (most recent call last)" ) ; then
-		rvt="1"
-
-		if ( echo "$cfg_content" | grep -q "DistributionNotFound: meld3" ); then
-			# https://github.com/Supervisor/meld3/issues/23
-			(
-				set -x
-				local temp="$(mktemp -d)"
-				local pwd="$(pwd)"
-
-				download_file 'https://pypi.python.org/packages/source/m/meld3/meld3-1.0.2.tar.gz' \
-					"$temp/meld3.tar.gz"
-
-				cd "$temp"
-				tar -zxf "$temp/meld3.tar.gz" --strip=1
-				python setup.py install
-				cd "$pwd"
-			)
-
-			if [ "$?" = "0" ] ; then
-				(
-					set -x
-					echo_supervisord_conf >"$cfg_file" 2>/dev/null
-				)
-				rvt="$?"
-			fi
-		fi
-	fi
-
-	if [ "$rvt" != "0" ]; then
-		rm -f "$cfg_file"
-		echo "创建 Supervisor 配置文件失败!"
-		exit 1
-	fi
-
-	if ! grep -q '^files[[:space:]]*=[[:space:]]*/etc/supervisor/conf.d/\*\.conf$' "$cfg_file"; then
-		if grep -q '^\[include\]$' "$cfg_file"; then
-			sed -i '/^\[include\]$/a files = \/etc\/supervisor\/conf.d\/\*\.conf' "$cfg_file"
-		else
-			sed -i '$a [include]\nfiles = /etc/supervisor/conf.d/*.conf' "$cfg_file"
-		fi
-	fi
-
-	download_startup_file
 }
 
-download_startup_file() {
-	local supervisor_startup_file=""
-	local supervisor_startup_file_url=""
 
-	if command_exists systemctl; then
-		supervisor_startup_file="/etc/systemd/system/supervisord.service"
-		supervisor_startup_file_url="$SUPERVISOR_SYSTEMD_FILE_URL"
+# 应用服务配置变更：重载配置并重启当前实例
+apply_service_config() {
+	detect_service_backend
+	reload_service_manager
 
-		download_file "$supervisor_startup_file_url" "$supervisor_startup_file"
-		(
-			set -x
-			# 删除旧版 service 文件
-
-			local old_service_file="/lib/systemd/system/supervisord.service"
-			if [ -f "$old_service_file" ]; then
-				rm -f "$old_service_file"
-			fi
-			systemctl daemon-reload >/dev/null 2>&1
-		)
-	elif command_exists service; then
-		supervisor_startup_file='/etc/init.d/supervisord'
-
-		if [ -z "$lsb_dist" ]; then
-			get_os_info
-		fi
-
-		case "$lsb_dist" in
-			ubuntu|debian|raspbian)
-				supervisor_startup_file_url="$SUPERVISOR_SERVICE_FILE_DEBIAN_URL"
-				;;
-			fedora|centos|redhat|oraclelinux|photon)
-				supervisor_startup_file_url="$SUPERVISOR_SERVICE_FILE_REDHAT_URL"
-				;;
-			*)
-				echo "没有适合当前系统的服务启动脚本文件。"
-				exit 1
-				;;
-		esac
-
-		download_file "$supervisor_startup_file_url" "$supervisor_startup_file"
-		(
-			set -x
-			chmod a+x "$supervisor_startup_file"
-		)
-	else
-		cat >&2 <<-'EOF'
-		当前服务器未安装 systemctl 或者 service 命令，无法配置服务。
-		请先手动安装 systemd 或者 service 之后再运行脚本。
-		EOF
-
-		exit 1
+	local service_file=""
+	service_file="$(get_current_file 'service')"
+	if [ ! -f "$service_file" ]; then
+		return 0
 	fi
-}
 
-start_supervisor() {
 	( set -x; sleep 3 )
-	if command_exists systemctl; then
-		if systemctl status supervisord.service >/dev/null 2>&1; then
-			systemctl restart supervisord.service
-		else
-			systemctl start supervisord.service
-		fi
-	elif command_exists service; then
-		if service supervisord status >/dev/null 2>&1; then
-			service supervisord restart
-		else
-			service supervisord start
-		fi
-	fi
-
-	if [ "$?" != "0" ]; then
+	if ! restart_instance_service "$current_instance_id"; then
 		cat >&2 <<-'EOF'
-		启动 Supervisor 失败, Kcptun 无法正常工作!
-		请反馈给脚本作者。
+		启动 Kcptun 服务失败，请查看日志获取原因。
 		EOF
 		exit 1
 	fi
 }
 
-enable_supervisor() {
-	if command_exists systemctl; then
-		(
-			set -x
-			systemctl enable "supervisord.service"
-		)
-	elif command_exists service; then
-		if [ -z "$lsb_dist" ]; then
-			get_os_info
-		fi
+# 重新生成全部实例的服务文件（服务管理方式升级时使用）
+regenerate_service_files() {
+	detect_service_backend
 
-		case "$lsb_dist" in
-			ubuntu|debian|raspbian)
-				(
-					set -x
-					update-rc.d -f supervisord defaults
-				)
-				;;
-			fedora|centos|redhat|oraclelinux|photon)
-				(
-					set -x
-					chkconfig --add supervisord
-					chkconfig supervisord on
-				)
-				;;
-			esac
+	local backup_instance_id="$current_instance_id"
+	local backup_run_user="$run_user"
+	local file=""
+	local instance_id=""
+
+	for file in $(list_instance_files); do
+		instance_id="$(echo "$file" | sed -e 's/^kcptun//' -e 's/\.service$//')"
+		current_instance_id="$instance_id"
+		run_user="$(get_instance_run_user "$instance_id")"
+		gen_service_file
+	done
+
+	current_instance_id="$backup_instance_id"
+	run_user="$backup_run_user"
+	reload_service_manager
+}
+
+# 从实例配置文件推断运行用户
+get_instance_run_user() {
+	local instance_id="$1"
+	local config_file="${KCPTUN_INSTALL_DIR}/server-config${instance_id}.json"
+	local tcp="false"
+	local listen=""
+	local port=""
+	local start_port=""
+
+	if [ -f "$config_file" ]; then
+		local content=""
+		content="$(cat "$config_file")"
+		tcp="$(get_json_string "$content" '.tcp')"
+		listen="$(get_json_string "$content" '.listen')"
+	fi
+
+	port="${listen##*:}"
+	start_port="${port%%-*}"
+
+	if [ "$tcp" = "true" ] || ( is_number "$start_port" && [ "$start_port" -le 1024 ] ); then
+		echo 'root'
+	else
+		echo 'kcptun'
 	fi
 }
 
@@ -1758,24 +1840,16 @@ set_kcptun_config() {
 		unset_hidden_parameters
 	fi
 
-	if echo "$input" | grep -qE '^[0-9]+-[0-9]+$'; then
-		range_start=$(echo "$input" | cut -d'-' -f1)
-		range_end=$(echo "$input" | cut -d'-' -f2)
+	# 监听低端口或使用 TCP 时需要 root 权限
+	if echo "$listen_port" | grep -qE '^[0-9]+-[0-9]+$'; then
+		range_start=$(echo "$listen_port" | cut -d'-' -f1)
+		range_end=$(echo "$listen_port" | cut -d'-' -f2)
 
-		if [ "$range_start" -ge 1 ] && [ "$range_start" -le 65535 ] && \
-			[ "$range_end" -ge 1 ] && [ "$range_end" -le 65535 ] && \
-			[ "$range_start" -le "$range_end" ]; then
-			# 新增端口段检测逻辑
-			if [ "$range_start" -le 1024 ] || [ "$range_end" -le 1024 ]; then
-				run_user="root"
-			fi
-		fi
-	elif is_port "$input"; then
-		listen_port="$input"
-		# 端口检测逻辑
-		if [ "$listen_port" -le 1024 ]; then
+		if [ "$range_start" -le 1024 ] || [ "$range_end" -le 1024 ]; then
 			run_user="root"
 		fi
+	elif is_port "$listen_port" && [ "$listen_port" -le 1024 ]; then
+		run_user="root"
 	fi
 
 	echo "配置完成。"
@@ -2124,11 +2198,11 @@ gen_kcptun_config() {
 
 	local config_file=""
 	config_file="$(get_current_file 'config')"
-	local supervisor_config_file=""
-	supervisor_config_file="$(get_current_file 'supervisor')"
+	local service_file=""
+	service_file="$(get_current_file 'service')"
 
 	mk_file_dir "$config_file"
-	mk_file_dir "$supervisor_config_file"
+	mk_file_dir "$service_file"
 
 	if [ -n "$snmplog" ]; then
 		mk_file_dir "$snmplog" '777'
@@ -2187,6 +2261,11 @@ gen_kcptun_config() {
 	write_configs_to_file "snmplog" "snmpperiod" "pprof" "acknodelay" "nodelay" \
 		"interval" "resend" "nc" "sockbuf" "smuxbuf" "keepalive" "streambuf" "smuxver"
 
+	# 以最终写入的配置为准重新推断运行用户，兼容手动编辑配置的场景
+	if [ -f "$config_file" ]; then
+		run_user="$(get_instance_run_user "$current_instance_id")"
+	fi
+
 	if ! grep -q "^${run_user}:" '/etc/passwd'; then
 		(
 			set -x
@@ -2194,18 +2273,14 @@ gen_kcptun_config() {
 		)
 	fi
 
-	cat > "$supervisor_config_file"<<-EOF
-	[program:kcptun${current_instance_id}]
-	user=${run_user}
-	directory=${KCPTUN_INSTALL_DIR}
-	command=$(get_kcptun_server_file) -c "${config_file}"
-	process_name=%(program_name)s
-	autostart=true
-	redirect_stderr=true
-	stdout_logfile=$(get_current_file 'log')
-	stdout_logfile_maxbytes=1MB
-	stdout_logfile_backups=0
-	EOF
+	# 旧版由 root 托管的日志文件需要交还给运行用户
+	local log_file=""
+	log_file="$(get_current_file 'log')"
+	if [ -f "$log_file" ] && [ "$run_user" != "root" ]; then
+		chown "$run_user" "$log_file" 2>/dev/null || true
+	fi
+
+	gen_service_file
 }
 
 # 设置防火墙开放端口
@@ -2266,16 +2341,16 @@ select_instance() {
 		EOF
 
 		local files=""
-		files=$(ls -lt '/etc/supervisor/conf.d/' | grep "^-" | awk '{print $9}' | grep "^kcptun[0-9]*\.conf$")
+		files="$(list_instance_files)"
 		local i=0
 		local array=""
 		local id=""
 		for file in $files; do
-			id="$(echo "$file" | grep -oE "[0-9]+")"
+			id="$(echo "$file" | sed -e 's/^kcptun//' -e 's/\.service$//')"
 			array="${array}${id}#"
 
 			i=$(expr $i + 1)
-			echo "(${i}) ${file%.*}"
+			echo "(${i}) kcptun${id}"
 		done
 
 		local sel=""
@@ -2313,9 +2388,9 @@ get_kcptun_server_file() {
 
 # 计算新实例的 ID
 get_new_instance_id() {
-	if [ -f "/etc/supervisor/conf.d/kcptun.conf" ]; then
+	if [ -f "$(get_service_file_path '')" ]; then
 		local i=2
-		while [ -f "/etc/supervisor/conf.d/kcptun${i}.conf" ]
+		while [ -f "$(get_service_file_path "$i")" ]
 		do
 			i=$(expr $i + 1)
 		done
@@ -2520,11 +2595,11 @@ do_install() {
 	set_kcptun_config
 	install_deps
 	install_kcptun
-	install_supervisor
+	install_service_manager
 	gen_kcptun_config
 	set_firewall
-	start_supervisor
-	enable_supervisor
+	apply_service_config
+	enable_instance_service "$current_instance_id"
 
 	cat >&1 <<-EOF
 
@@ -2536,8 +2611,8 @@ do_install() {
 	cat >&1 <<-EOF
 	Kcptun 安装目录: ${KCPTUN_INSTALL_DIR}
 
-	已将 Supervisor 加入开机自启,
-	Kcptun 服务端会随 Supervisor 的启动而启动
+	已将 Kcptun 服务加入开机自启,
+	服务管理方式: ${SERVICE_BACKEND}
 
 	更多使用说明: ${0} help
 	
@@ -2551,93 +2626,57 @@ do_uninstall() {
 	你选择了卸载 Kcptun 服务端
 	EOF
 	any_key_to_continue
-	echo "正在卸载 Kcptun 服务端并停止 Supervisor..."
+	echo "正在停止 Kcptun 服务并清理配置..."
 
-	if command_exists supervisorctl; then
-		supervisorctl shutdown
-	fi
+	detect_service_backend
 
-	if command_exists systemctl; then
-		systemctl stop supervisord.service
-	elif command_exists serice; then
-		service supervisord stop
-	fi
+	local file=""
+	local instance_id=""
+	for file in $(list_instance_files); do
+		instance_id="$(echo "$file" | sed -e 's/^kcptun//' -e 's/\.service$//')"
+		stop_instance_service "$instance_id"
+		disable_instance_service "$instance_id"
+	done
 
 	(
 		set -x
-		rm -f "/etc/supervisor/conf.d/kcptun*.conf"
+		rm -f "$SYSTEMD_UNIT_DIR"/kcptun*.service
+		rm -f "$SYSV_INIT_DIR"/kcptun*
+		rm -f /var/run/kcptun*.pid
 		rm -rf "$KCPTUN_INSTALL_DIR"
 		rm -rf "$KCPTUN_LOG_DIR"
 	)
+	reload_service_manager
 
-	cat >&1 <<-'EOF'
-	是否同时卸载 Supervisor ?
-	注意: Supervisor 的配置文件将同时被删除
-	EOF
+	# 旧版 Supervisor 配置清理
+	if [ -d "$LEGACY_SUPERVISOR_DIR" ] && \
+		ls "$LEGACY_SUPERVISOR_DIR"/kcptun*.conf >/dev/null 2>&1; then
+		cat >&1 <<-EOF
+		检测到旧版 Supervisor 配置:
+		  ${LEGACY_SUPERVISOR_DIR}/kcptun*.conf
+		是否一并删除这些旧配置?
+		EOF
 
-	read -p "(默认: 不卸载) 请选择 [y/n]: " yn
-	if [ -n "$yn" ]; then
+		local yn=""
+		read -p "(默认: 不删除) 请选择 [y/n]: " yn
 		case "$(first_character "$yn")" in
 			y|Y)
-				if command_exists systemctl; then
-					systemctl disable supervisord.service
-					rm -f "/lib/systemd/system/supervisord.service" \
-						"/etc/systemd/system/supervisord.service"
-				elif command_exists service; then
-					if [ -z "$lsb_dist" ]; then
-						get_os_info
-					fi
-					case "$lsb_dist" in
-						ubuntu|debian|raspbian)
-							(
-								set -x
-								update-rc.d -f supervisord remove
-							)
-							;;
-						fedora|centos|redhat|oraclelinux|photon)
-							(
-								set -x
-								chkconfig supervisord off
-								chkconfig --del supervisord
-							)
-							;;
-					esac
-					rm -f '/etc/init.d/supervisord'
+				if command_exists supervisorctl; then
+					local conf=""
+					for conf in "$LEGACY_SUPERVISOR_DIR"/kcptun*.conf; do
+						supervisorctl stop "$(basename "$conf" .conf)" >/dev/null 2>&1 || true
+					done
 				fi
-
 				(
 					set -x
-					# 新版使用 pip 卸载
-					if command_exists pip; then
-						pip uninstall -y supervisor 2>/dev/null || true
-					fi
-
-					# 旧版使用 easy_install 卸载
-					if command_exists easy_install; then
-						rm -rf "$(easy_install -mxN supervisor | grep 'Using.*supervisor.*\.egg' | awk '{print $2}')"
-					fi
-
-					rm -rf '/etc/supervisor/'
-					rm -f '/usr/local/bin/supervisord' \
-						'/usr/local/bin/supervisorctl' \
-						'/usr/local/bin/pidproxy' \
-						'/usr/local/bin/echo_supervisord_conf' \
-						'/usr/bin/supervisord' \
-						'/usr/bin/supervisorctl' \
-						'/usr/bin/pidproxy' \
-						'/usr/bin/echo_supervisord_conf'
+					rm -f "$LEGACY_SUPERVISOR_DIR"/kcptun*.conf
 				)
-				;;
-			n|N|*)
-				start_supervisor
 				;;
 		esac
 	fi
 
-	cat >&1 <<-EOF
+	cat >&1 <<-'EOF'
 	卸载完成, 欢迎再次使用。
-	注意: 脚本没有自动卸载 python-pip 和 python-setuptools（旧版脚本使用）
-	如有需要, 你可以自行卸载。
 	EOF
 }
 
@@ -2702,8 +2741,8 @@ do_update() {
 
 			any_key_to_continue
 
-			download_startup_file
-			set -sed -i "s/^INIT_VERSION=${INIT_VERSION}/INIT_VERSION=${new_init_version}/" \
+			regenerate_service_files
+			sed -i "s/^INIT_VERSION=${INIT_VERSION}/INIT_VERSION=${new_init_version}/" \
 				"$shell_path"
 		fi
 	fi
@@ -2728,7 +2767,7 @@ do_update() {
 		any_key_to_continue
 
 		install_kcptun
-		start_supervisor
+		apply_service_config
 
 		show_version_and_client_url
 	else
@@ -2750,7 +2789,8 @@ instance_add() {
 	set_kcptun_config
 	gen_kcptun_config
 	set_firewall
-	start_supervisor
+	apply_service_config
+	enable_instance_service "$current_instance_id"
 
 	cat >&1 <<-EOF
 	恭喜, 实例 kcptun${current_instance_id} 添加成功!
@@ -2783,26 +2823,33 @@ instance_del() {
 	EOF
 	any_key_to_continue
 
-	# 获取实例的 supervisor 配置文件
-	supervisor_config_file="$(get_current_file 'supervisor')"
-	if [ ! -f "$supervisor_config_file" ]; then
+	# 获取实例的服务文件
+	local service_file=""
+	service_file="$(get_current_file 'service')"
+	if [ ! -f "$service_file" ]; then
 		echo "你选择的实例 kcptun${current_instance_id} 不存在!"
 		exit 1
 	fi
 
+	local current_config_file=""
 	current_config_file="$(get_current_file 'config')"
+	local current_log_file=""
 	current_log_file="$(get_current_file 'log')"
+	local current_snmp_log_file=""
 	current_snmp_log_file="$(get_current_file 'snmp')"
+
+	stop_instance_service "$current_instance_id"
+	disable_instance_service "$current_instance_id"
 
 	(
 		set -x
-		rm -f "$supervisor_config_file" \
+		rm -f "$service_file" \
 			"$current_config_file" \
 			"$current_log_file" \
 			"$current_snmp_log_file"
 	)
 
-	start_supervisor
+	reload_service_manager
 
 	cat >&1 <<-EOF
 	实例 kcptun${current_instance_id} 删除成功!
@@ -2898,7 +2945,7 @@ instance_reconfig() {
 	你选择了重新配置实例 kcptun${current_instance_id}, 正在开始操作...
 	EOF
 
-	if [ ! -f "$(get_current_file 'supervisor')" ]; then
+	if [ ! -f "$(get_current_file 'service')" ]; then
 		cat >&2 <<-EOF
 		你选择的实例 kcptun${current_instance_id} 不存在!
 		EOF
@@ -2952,19 +2999,7 @@ instance_reconfig() {
 	gen_kcptun_config
 	set_firewall
 
-	if command_exists supervisorctl; then
-		supervisorctl restart "kcptun${current_instance_id}"
-
-		if [ "$?" != "0" ]; then
-			cat >&2 <<-'EOF'
-			重启 Supervisor 失败, Kcptun 无法正常工作!
-			请查看日志获取原因，或者反馈给脚本作者。
-			EOF
-			exit 1
-		fi
-	else
-		start_supervisor
-	fi
+	apply_service_config
 
 	cat >&1 <<-EOF
 
@@ -3028,7 +3063,7 @@ manual_install() {
 			any_key_to_continue
 
 			install_kcptun "$tag_name"
-			start_supervisor
+			apply_service_config
 			show_version_and_client_url
 			break
 		fi
@@ -3066,8 +3101,8 @@ is_installed() {
 		)
 	fi
 
-	if [ -d '/etc/supervisor/conf.d/' ] && [ -d "$KCPTUN_INSTALL_DIR" ] && \
-		[ -n "$(get_installed_version)" ]; then
+	if [ -d "$KCPTUN_INSTALL_DIR" ] && [ -n "$(get_installed_version)" ] && \
+		[ "$(get_instance_count)" -gt 0 ]; then
 		return 0
 	fi
 
