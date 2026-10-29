@@ -842,6 +842,37 @@ get_kcptun_version_info() {
 	return 0
 }
 
+# 获取可安装的 Kcptun 版本列表
+# 输出格式: TAG<TAB>发布时间<TAB>是否预览版, 每行一个版本, 按发布时间倒序
+# 参数: 最多返回的版本数量(默认 30)
+list_kcptun_versions() {
+	local limit="${1:-30}"
+	local json_content=""
+	json_content="$(get_content "${KCPTUN_RELEASES_API}?per_page=100" false)"
+	if [ -z "$json_content" ]; then
+		return 1
+	fi
+
+	local list=""
+	list="$(get_json_string "$json_content" \
+		".[] | select(.draft | not) | [.tag_name, (.published_at // \"\"), (.prerelease | tostring)] | @tsv")"
+	if [ -z "$list" ]; then
+		return 1
+	fi
+
+	# 过滤掉脚本不支持安装的版本, 并限制显示数量
+	printf '%s\n' "$list" | awk -F '\t' -v limit="$limit" '
+		{
+			num = $1
+			gsub(/[^0-9]/, "", num)
+			if ($1 == "SNMP_Milestone") next
+			if (length(num) == 8 && num + 0 <= 20160826) next
+			if (count >= limit) next
+			count++
+			print $0
+		}'
+}
+
 # 从 Release 的 checksums.txt 中查询目标文件的 SHA256
 get_kcptun_checksum() {
 	local asset_name="$1"
@@ -3741,14 +3772,56 @@ manual_install() {
 	EOF
 
 	local tag_name="$1"
+	local versions=""
+	local version_count=0
+	local list_shown="false"
+	local choice=""
 
 	while true
 	do
 		if [ -z "$tag_name" ]; then
-			cat >&1 <<-'EOF'
-			请输入你想安装的 Kcptun 版本的完整 TAG
-			EOF
-			read -p "(例如: v20160904): " tag_name
+			# 首次进入时拉取并展示可安装的版本列表, 失败则回退为手动输入 TAG
+			if [ "$list_shown" != "true" ]; then
+				echo "正在获取可用版本列表, 请稍候..."
+				versions="$(list_kcptun_versions 30)"
+				if [ -n "$versions" ]; then
+					version_count="$(printf '%s\n' "$versions" | awk 'END { print NR }')"
+					cat >&1 <<-EOF
+					可用的 Kcptun 版本 (最近 ${version_count} 个, 按发布时间倒序):
+					EOF
+					printf '%s\n' "$versions" | awk -F '\t' '{
+						date = substr($2, 1, 10)
+						suffix = ($3 == "true") ? "  (预览版)" : ""
+						printf "  (%2d) %-18s %s%s\n", NR, $1, date, suffix
+					}'
+					echo "--------------------------------------------------"
+				else
+					cat >&1 <<-'EOF'
+					未能获取版本列表, 请手动输入完整的 TAG
+					EOF
+				fi
+				list_shown="true"
+			fi
+
+			if [ "$version_count" -gt 0 ]; then
+				read -p "(默认: 1) 请输入版本序号, 或直接输入完整 TAG: " choice
+				[ -z "$choice" ] && choice="1"
+			else
+				read -p "(例如: v20160904): " choice
+			fi
+
+			# 纯数字且在列表范围内时按序号选择, 否则视为完整 TAG
+			if [ "$version_count" -gt 0 ] && is_number "$choice" && [ ${#choice} -le 3 ]; then
+				if [ "$choice" -ge 1 ] && [ "$choice" -le "$version_count" ]; then
+					tag_name="$(printf '%s\n' "$versions" | sed -n "${choice}p" | cut -f1)"
+				else
+					echo "输入的序号超出范围, 请重新输入!"
+					continue
+				fi
+			else
+				tag_name="$choice"
+			fi
+
 			if [ -z "$tag_name" ]; then
 				echo "输入无效, 请重新输入!"
 				continue
