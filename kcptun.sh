@@ -3331,8 +3331,7 @@ update_script_component() {
 			EOF
 		fi
 
-		any_key_to_continue
-
+		# 选择更新后直接执行，不再等待确认按键
 		# 先下载到临时文件，校验通过后再替换，避免更新失败导致脚本丢失
 		local new_shell_path="${shell_path}.new"
 		download_file "$new_shell_url" "$new_shell_path" "$new_shell_sha256"
@@ -3361,7 +3360,6 @@ update_script_component() {
 		$(printf '%s\n' "$config_change_log")
 		需要重新设置 Kcptun
 		EOF
-		any_key_to_continue
 
 		instance_reconfig
 
@@ -3376,8 +3374,6 @@ update_script_component() {
 		更新说明:
 		$(printf '%s\n' "$init_change_log")
 		EOF
-
-		any_key_to_continue
 
 		regenerate_service_files
 		sed -i "s/^INIT_VERSION=${INIT_VERSION}/INIT_VERSION=${new_init_version}/" \
@@ -3419,7 +3415,6 @@ update_kcptun_component() {
 	更新说明:
 	$(printf '%s\n' "$kcptun_release_body")
 	EOF
-	any_key_to_continue
 
 	install_kcptun
 	apply_service_config
@@ -3488,25 +3483,11 @@ do_update_menu() {
 					echo "当前没有可用的 Kcptun 更新。"
 					continue
 				fi
-				local kcptun_rc=0
 				update_kcptun_component
-				kcptun_rc=$?
-				# 更新失败时停留一次便于查看错误；无可用更新时直接回到菜单
-				if [ "$kcptun_rc" != "2" ]; then
-					any_key_to_continue
-				fi
 				;;
 			3)
-				local kcptun_rc=0
-				local script_rc=0
 				update_kcptun_component
-				kcptun_rc=$?
 				update_script_component
-				script_rc=$?
-				# 两个组件都没有可更新内容时不再要求按键，直接回到更新菜单
-				if [ "$kcptun_rc" != "2" ] || [ "$script_rc" != "2" ]; then
-					any_key_to_continue
-				fi
 				;;
 			*)
 				return 0
