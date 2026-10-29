@@ -1,13 +1,27 @@
-# kcptun script
+# kcptun-script
 
-使用KCP协议通过TCP中转UDP的脚本2026版
+Kcptun 服务端一键安装/管理脚本（2026 版）。基于 KCP 协议，将 UDP 流量通过 TCP 中转加速，显著改善高丢包、高延迟网络环境下的传输质量。
 
+脚本完全基于 POSIX Shell 编写，交互式引导配置，支持 Debian/Ubuntu 与 CentOS/Fedora/RedHat 等 RedHat 系发行版，支持 Systemd 与 SysVinit 两种服务管理方式，并内置多实例管理能力。
 
+## 功能特性
+
+- **一键安装**：自动下载 Kcptun 服务端（支持 32/64 位系统），校验文件哈希，安装依赖（wget/gawk/tar/python/pip/jq）
+- **交互式配置**：引导式设置运行端口、加速地址、加密方式、加速模式等全部参数，均有默认值，一路回车即可完成部署
+- **多实例管理**：支持添加、删除、重新配置多个 Kcptun 实例，实现多端口同时加速
+- **Supervisor 守护**：自动通过 pip 安装 Supervisor 并配置开机自启，进程崩溃自动拉起
+- **自动防火墙配置**：自动检测 firewalld / iptables 并放行 UDP 监听端口
+- **一键更新**：脚本自身、配置模板、服务启动文件、Kcptun 主程序均可在线检查更新，并展示更新日志
+- **自定义版本安装**：可指定任意 TAG 安装历史版本（不支持 v20160826 及更早版本）
+- **客户端配置生成**：安装完成后自动输出服务端配置、对应的客户端 JSON 配置以及手机端参数字符串
+- **安全加固**：自动禁用 SELinux，默认以非 root 的 `kcptun` 用户运行服务（使用低端口或 TCP 模式时自动切换为 root）
+
+## 目录结构
 
 ```sh
 $ tree
 ├── kcptun
-│   └── kcptun.sh # kcptun 一键安装脚本
+│   └── kcptun.sh # kcptun 一键安装脚本
 └── ovz-bbr
     └── ovz-bbr-installer.sh # OpenVZ BBR 一键安装脚本
 ```
@@ -21,12 +35,23 @@ wget --no-check-certificate -O kcptun.sh https://github.com/tobycroft/shell-scri
 sh kcptun.sh
 ```
 
-
-* 其他Linux安装命令：
+* 其他 Linux 安装命令：
 ```sh
 wget --no-check-certificate -O kcptun.sh https://github.com/tobycroft/shell-scripts/raw/master/kcptun/kcptun.sh
 sh kcptun.sh
 ```
+
+> 安装脚本需要能访问 github.com，部分国内服务器可能无法正常访问。下载失败时脚本会自动重试 3 次，仍失败可按提示手动下载文件放置到指定目录后重新运行。
+
+### 系统要求
+
+- **支持的系统**：Ubuntu / Debian / Raspbian / CentOS / Fedora / RedHat / OracleLinux / Photon
+- **支持的架构**：x86（386）/ x86_64（amd64）
+- **需要 root 权限**运行
+- **服务管理**：需存在 `systemctl` 或 `service` 命令
+- **Python**：2.6 及以上（Python 2.6 会自动安装 supervisor 3.x，建议升级至 ≥ 2.7.9 或 ≥ 3.4）
+
+### 命令行参数
 
 * 帮助信息
 
@@ -59,3 +84,83 @@ Kcptun 相关命令:
                   {启动|关闭|重启|查看状态}
 ```
 
+### 交互式配置项
+
+安装/添加实例/重新配置时会依次引导以下参数：
+
+| 参数 | 说明 | 默认值 |
+| --- | --- | --- |
+| listen（端口） | 服务端监听端口，新版支持端口范围，如 `30000-35000` | `29900` |
+| target（加速地址） | 需要加速的地址，支持主机名、IPv4、IPv6 | `127.0.0.1` |
+| target（加速端口） | 需要加速的端口，不能与监听端口相同 | `12984` |
+| key（密码） | 连接密码，两端必须一致 | `very fast` |
+| crypt（加密方式） | aes / aes-128 / aes-192 / salsa20 / blowfish / twofish / cast5 / 3des / tea / xtea / xor / none | `aes` |
+| mode（加速模式） | normal / fast / fast2 / fast3 / manual（手动档可配置隐藏参数） | `fast` |
+| mtu | UDP 数据包最大传输单元 | `1350` |
+| sndwnd | 发送窗口大小（数据包数量） | `512` |
+| rcvwnd | 接收窗口大小（数据包数量） | `512` |
+| datashard | 前向纠错数据包分片，两端必须一致 | `10` |
+| parityshard | 前向纠错校验包分片，两端必须一致 | `3` |
+| dscp | 差分服务代码点 | `0` |
+| nocomp | 是否关闭数据压缩（文本类数据可开启，代理套壳流量建议关闭） | `true` |
+| quiet | 是否屏蔽 open/close 日志输出 | `false` |
+| tcp | 是否使用 TCP 传输（开启后以 root 运行） | `false` |
+| snmp | 是否记录 SNMP 日志（可设置记录间隔 `snmpperiod`） | 否 |
+| pprof | 是否开启 pprof 性能监控（`http://IP:6060/debug/pprof/`） | `false` |
+| 隐藏参数 | acknodelay / sockbuf / smuxbuf / keepalive / smuxver / streambuf，通常保持默认即可 | 见脚本内默认值 |
+
+选择 `manual` 加速模式时可额外配置：
+
+| 参数 | 说明 | 默认值 |
+| --- | --- | --- |
+| nodelay | 是否启用 nodelay 模式 | `1`（启用） |
+| interval | 协议内部工作间隔（ms） | `20` |
+| resend | 快速重传模式：0 不启用 / 1 启用 / 2 跨越 2 次 ACK 直接重传 | `2` |
+| nc | 是否关闭流控 | `1`（关闭流控） |
+
+### 文件路径说明
+
+| 路径 | 说明 |
+| --- | --- |
+| `/usr/local/kcptun/` | Kcptun 安装目录（含 `server_linux_amd64` 等可执行文件与 `bin/jq`） |
+| `/usr/local/kcptun/server-config<id>.json` | 各实例服务端配置文件 |
+| `/var/log/kcptun/server<id>.log` | 各实例运行日志 |
+| `/var/log/kcptun/snmplog<id>.log` | SNMP 日志（可选） |
+| `/etc/supervisor/conf.d/kcptun<id>.conf` | 各实例 Supervisor 配置文件 |
+
+> 若检测到旧版安装目录 `/usr/share/kcptun`，脚本会自动将文件迁移至 `/usr/local/kcptun`。
+
+### 安装后输出
+
+安装成功后，脚本会自动输出：
+
+1. 服务器 IP、监听端口、加速地址及全部生效参数
+2. 当前安装的 Kcptun 版本号及对应客户端下载地址
+3. **客户端 JSON 配置文件**（`localaddr` 对应服务端加速端口，`remoteaddr` 对应服务器 IP + 监听端口，收发窗口自动对调）
+4. **手机端参数字符串**（如 `key=very fast;crypt=aes;mode=fast;...`，可直接填入支持 Kcptun 的手机客户端）
+
+### 重复运行脚本
+
+已安装的情况下再次运行脚本，会进入管理菜单：
+
+```text
+(1) 覆盖安装
+(2) 重新配置
+(3) 添加实例(多端口)
+(4) 检查更新
+(5) 查看配置
+(6) 查看日志输出
+(7) 自定义版本安装
+(8) 删除实例
+(9) 完全卸载
+(10) 退出脚本
+```
+
+### 常见问题
+
+- **端口占用**：配置的监听端口若已被占用会提示重新输入
+- **低端口运行**：监听端口 ≤ 1024 时，服务自动以 root 用户运行
+- **Supervisor 冲突**：若曾通过其他方式安装过 Supervisor（存在 `/etc/supervisord.conf`），脚本会提示先备份并卸载原有版本，避免冲突
+- **防火墙**：脚本会自动添加 firewalld / iptables 的 UDP 端口放行规则，失败时会输出手动添加命令
+- **pip 安装失败**：可参考脚本提示，通过 `apt`/`yum`/`get-pip.py` 手动安装 python-pip 后重新运行
+- **版本回退**：使用 `sh kcptun.sh manual` 输入完整 TAG（如 `v20160904`）即可安装指定历史版本
