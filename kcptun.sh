@@ -2979,7 +2979,9 @@ instance_reconfig() {
 					return 1
 				fi
 
-				if command_exists vim; then
+				if command_exists nano; then
+					nano "$config_file"
+				elif command_exists vim; then
 					vim "$config_file"
 				elif command_exists vi; then
 					vi "$config_file"
