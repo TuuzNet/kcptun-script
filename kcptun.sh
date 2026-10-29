@@ -248,6 +248,16 @@ get_os_info() {
 		lsb_dist='redhat'
 	fi
 
+	# 红帽系及衍生发行版统一走 redhat / oraclelinux 分支
+	case "$lsb_dist" in
+		rhel|rockylinux|rocky|almalinux|alma)
+			lsb_dist='redhat'
+			;;
+		ol|oracle|oraclelinux)
+			lsb_dist='oraclelinux'
+			;;
+	esac
+
 	case "$lsb_dist" in
 		ubuntu)
 			if command_exists lsb_release; then
@@ -256,10 +266,17 @@ get_os_info() {
 			if [ -z "$dist_version" ] && [ -r /etc/lsb-release ]; then
 				dist_version="$(. /etc/lsb-release && echo "$DISTRIB_CODENAME")"
 			fi
+			if [ -z "$dist_version" ] && [ -r /etc/os-release ]; then
+				dist_version="$(. /etc/os-release && echo "$VERSION_ID")"
+			fi
 			;;
 
 		debian|raspbian)
-			dist_version="$(cat /etc/debian_version | sed 's/\/.*//' | sed 's/\..*//')"
+			if [ -r /etc/debian_version ]; then
+				dist_version="$(cat /etc/debian_version | sed 's/\/.*//' | sed 's/\..*//')"
+			elif [ -r /etc/os-release ]; then
+				dist_version="$(. /etc/os-release && echo "$VERSION_ID" | cut -d'.' -f1)"
+			fi
 			case "$dist_version" in
 				9)
 					dist_version="stretch"
@@ -279,7 +296,13 @@ get_os_info() {
 			;;
 
 		fedora|centos|redhat)
-			dist_version="$(rpm -q --whatprovides ${lsb_dist}-release --queryformat "%{VERSION}\n" | sed 's/\/.*//' | sed 's/\..*//' | sed 's/Server*//' | sort | tail -1)"
+			if [ -r /etc/os-release ]; then
+				dist_version="$(. /etc/os-release && echo "$VERSION_ID" | cut -d'.' -f1)"
+			fi
+			if [ -z "$dist_version" ]; then
+				dist_version="$(rpm -q --whatprovides ${lsb_dist}-release --queryformat "%{VERSION}\n" 2>/dev/null | \
+					grep -E '^[0-9]' | sed 's/\/.*//' | sed 's/\..*//' | sort | tail -1)"
+			fi
 			;;
 
 		"vmware photon")
@@ -534,12 +557,25 @@ install_jq() {
 				( set -x; apt-get install -y -q jq ) >/dev/null 2>&1 || true
 				;;
 			fedora|centos|redhat|oraclelinux|photon)
-				if [ "$lsb_dist" = "fedora" ] && is_number "$dist_version" && [ "$dist_version" -ge "22" ]; then
-					( set -x; dnf -y -q install jq ) >/dev/null 2>&1 || true
-				elif [ "$lsb_dist" = "photon" ]; then
-					( set -x; tdnf -y install jq ) >/dev/null 2>&1 || true
-				else
-					( set -x; yum -y -q install jq ) >/dev/null 2>&1 || true
+				local jq_mgr=""
+				if command_exists dnf; then
+					jq_mgr="dnf -y -q"
+				elif command_exists tdnf; then
+					jq_mgr="tdnf -y"
+				elif command_exists yum; then
+					jq_mgr="yum -y -q"
+				fi
+
+				if [ -z "$jq_mgr" ]; then
+					return 0
+				fi
+
+				if ! ( set -x; $jq_mgr install jq ) >/dev/null 2>&1; then
+					if [ "$jq_mgr" = "yum -y -q" ]; then
+						# CentOS 7 等系统的 jq 位于 EPEL，先启用扩展源后重试
+						( set -x; yum -y -q install epel-release ) >/dev/null 2>&1 || true
+						( set -x; yum -y -q install jq ) >/dev/null 2>&1 || true
+					fi
 				fi
 				;;
 		esac
@@ -947,29 +983,24 @@ install_deps() {
 			fi
 			;;
 		fedora|centos|redhat|oraclelinux|photon)
-			if [ "$lsb_dist" = "fedora" ] && is_number "$dist_version" && [ "$dist_version" -ge "22" ]; then
-				if ! command_exists wget && ! command_exists curl; then
-					( set -x; sleep 3; dnf -y -q install wget ca-certificates ) || deps_failed="true"
-				fi
+			local pkg_mgr=""
+			if command_exists dnf; then
+				pkg_mgr="dnf -y -q"
+			elif command_exists tdnf; then
+				pkg_mgr="tdnf -y"
+			elif command_exists yum; then
+				pkg_mgr="yum -y -q"
+			fi
 
-				if ! command_exists awk; then
-					( set -x; sleep 3; dnf -y -q install gawk ) || deps_failed="true"
-				fi
-			elif [ "$lsb_dist" = "photon" ]; then
-				if ! command_exists wget && ! command_exists curl; then
-					( set -x; sleep 3; tdnf -y install wget ca-certificates ) || deps_failed="true"
-				fi
-
-				if ! command_exists awk; then
-					( set -x; sleep 3; tdnf -y install gawk ) || deps_failed="true"
-				fi
+			if [ -z "$pkg_mgr" ]; then
+				deps_failed="true"
 			else
 				if ! command_exists wget && ! command_exists curl; then
-					( set -x; sleep 3; yum -y -q install wget ca-certificates ) || deps_failed="true"
+					( set -x; sleep 3; $pkg_mgr install wget ca-certificates ) || deps_failed="true"
 				fi
 
 				if ! command_exists awk; then
-					( set -x; sleep 3; yum -y -q install gawk ) || deps_failed="true"
+					( set -x; sleep 3; $pkg_mgr install gawk ) || deps_failed="true"
 				fi
 			fi
 			;;
