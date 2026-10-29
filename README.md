@@ -103,7 +103,7 @@ Kcptun 服务管理命令 (SysVinit):
 
 | 版本 | 含义 | 当前值 |
 | --- | --- | --- |
-| `shell_version` | 安装脚本版本 | `28` |
+| `shell_version` | 安装脚本版本 | `29` |
 | `config_version` | 服务端配置文件格式版本 | `7` |
 | `init_version` | 服务文件（systemd unit / init 脚本）版本 | `4` |
 
@@ -114,7 +114,7 @@ Kcptun 服务管理命令 (SysVinit):
 
 1. 修改 `kcptun.sh` 中的 `SHELL_VERSION`（必要时同时修改 `CONFIG_VERSION` / `INIT_VERSION`）
 2. 同步更新 `version.json` 的版本号、`change_log`、`shell_url`、`shell_sha256` 与 `release_url`
-3. 提交后创建并推送 tag：`git tag -a v28 -m "kcptun-script v28" && git push origin main --tags`
+3. 提交后创建并推送 tag：`git tag -a v29 -m "kcptun-script v29" && git push origin main --tags`
 4. 在 GitHub Releases 页面基于该 tag 创建 Release，粘贴 `change_log` 作为更新说明
 
 ### 交互式配置项
