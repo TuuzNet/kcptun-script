@@ -1,216 +1,184 @@
 # kcptun-script
 
-Kcptun 服务端一键安装/管理脚本（2026 版）。基于 KCP 协议，将 UDP 流量通过 TCP 中转加速，显著改善高丢包、高延迟网络环境下的传输质量。
+> Kcptun 服务端一键安装与管理脚本 · 当前版本 **v31**
 
-脚本完全基于 POSIX Shell 编写，交互式引导配置，支持 Debian/Ubuntu 与 CentOS/Fedora/RedHat 等 RedHat 系发行版，支持 Systemd 与 SysVinit 两种服务管理方式，并内置多实例管理能力。
+本脚本用于在一台 Linux 服务器上快速部署 [Kcptun](https://github.com/tobycroft/kcptun) 服务端：自动下载主程序、生成配置、托管为系统服务，并提供多实例管理与在线更新能力。
 
-## 功能特性
+---
 
-- **一键安装**：自动下载 Kcptun 服务端（支持 amd64 / x86 / arm64 / arm），使用 Release 的 `checksums.txt` 校验 SHA256，依赖仅需 wget/curl、gawk 与 jq
-- **交互式配置**：引导式设置运行端口、加速地址、加密方式、加速模式等全部参数，均有默认值，一路回车即可完成部署
-- **多实例管理**：支持添加、删除、重新配置多个 Kcptun 实例，实现多端口同时加速
-- **systemd 原生托管**：自动生成 systemd unit（SysVinit 环境下生成 init 脚本），支持开机自启与崩溃自动拉起，不再依赖 Python 与 Supervisor
-- **旧版平滑迁移**：检测到 Supervisor 部署可执行 `migrate` 切换到 systemd/SysVinit，沿用现有配置、无需重新配置，迁移后可一并卸载 Supervisor
-- **自动防火墙配置**：自动适配 firewalld / ufw / iptables 并放行 UDP 监听端口；防火墙处于关闭状态时只写入规则（或临时规则），不会启动或重启防火墙
-- **一键更新**：脚本自身、配置模板、服务文件、Kcptun 主程序均可在线检查更新，并展示更新日志；`check` 命令可仅查询是否有新版本而不执行更新
-- **自定义版本安装**：可指定任意 TAG 安装历史版本（不支持 v20160826 及更早版本）
-- **客户端配置生成**：安装完成后自动输出服务端配置、对应的客户端 JSON 配置以及手机端参数字符串
-- **下载加速**：支持 `GITHUB_PROXY` / `KCPTUN_RELEASES_API` / `KCPTUN_SCRIPT_BASE_URL` 环境变量，便于国内服务器接入镜像或反向代理
-- **安全加固**：自动禁用 SELinux，默认以非 root 的 `kcptun` 用户运行服务（使用低端口或 TCP 模式时自动切换为 root）
+## 新版与旧版的核心区别
 
-## 目录结构
+本次重构（v27 起）与旧的 Supervisor 版本相比，变化集中在**依赖、托管方式与升级体验**三块：
 
-```sh
-$ tree
-├── kcptun.sh      # kcptun 一键安装/管理脚本
-└── version.json   # 脚本自更新版本信息
-```
+| 维度 | 旧版（Supervisor） | 新版（v31） |
+| --- | --- | --- |
+| 运行依赖 | Python + pip + Supervisor | **无额外依赖**，systemd / SysVinit 原生托管 |
+| 进程管理 | `supervisord` + `supervisorctl` | `systemctl` / `service`，每实例一个 unit 或 init 脚本 |
+| 安装依赖 | wget、gawk、tar、python、python-pip | wget（或 curl）、gawk、jq |
+| 支持架构 | amd64 / 386 | **amd64 / 386 / arm64 / arm** |
+| 主程序获取 | tar.gz，从 Release 正文解析哈希 | **裸二进制 + `checksums.txt` 校验** |
+| jq | 固定下载 1.5 | **系统软件包优先**，缺失时下载 1.7.1 |
+| 更新能力 | 仅 `update` | **`check` 只查询** + `update` 执行，脚本更新带 SHA256 校验 |
+| 防火墙 | firewalld / iptables，会尝试启动防火墙 | **firewalld / ufw / iptables**，且不会启动或重启已关闭的防火墙 |
+| 旧版升级 | 需要重新配置 | **自动识别并迁移**，沿用原配置，无需重配 |
 
-## Kcptun 一键安装脚本
+一句话总结：**依赖更少、架构更全、升级不再要求重新配置。**
 
-* Ubuntu：
+---
+
+## 主要特性
+
+- **一键安装**：自动下载主程序、校验 SHA256、生成配置并注册为系统服务
+- **交互式配置**：端口、加速地址、密码、加密方式、加速模式等均有默认值，一路回车即可完成
+- **多实例管理**：添加、删除、重配多个实例，实现多端口同时加速
+- **服务托管**：systemd unit（SysVinit 环境下为 init 脚本），支持开机自启与崩溃自动拉起
+- **旧版平滑迁移**：检测到 Supervisor 部署时自动迁移，不需要重新配置
+- **下载加速**：支持 `GITHUB_PROXY`、`KCPTUN_RELEASES_API`、`KCPTUN_SCRIPT_BASE_URL` 接入镜像
+- **客户端输出**：安装完成后直接生成客户端 JSON 配置与手机端参数字符串
+
+---
+
+## 快速开始
+
+### 环境要求
+
+- 系统：Ubuntu / Debian / Raspbian / CentOS / Fedora / RedHat / OracleLinux / Photon
+- 架构：x86_64（amd64）、x86（386）、arm64、arm
+- 权限：root
+- 服务管理：systemd（优先）或 SysVinit
+
+### 安装
+
 ```sh
 wget --no-check-certificate -O kcptun.sh https://github.com/TuuzNet/kcptun-script/raw/main/kcptun.sh
 sh kcptun.sh
 ```
 
-* 其他 Linux 安装命令：
-```sh
-wget --no-check-certificate -O kcptun.sh https://github.com/TuuzNet/kcptun-script/raw/main/kcptun.sh
-sh kcptun.sh
-```
-
-> 安装脚本需要能访问 github.com，部分国内服务器可能无法正常访问。下载失败时脚本会自动重试 3 次，仍失败可按提示手动下载文件放置到指定目录后重新运行。
-
-### 系统要求
-
-- **支持的系统**：Ubuntu / Debian / Raspbian / CentOS / Fedora / RedHat / OracleLinux / Photon
-- **支持的架构**：x86_64（amd64）/ x86（386）/ arm64（aarch64）/ arm（armv6/armv7/armv5）
-- **需要 root 权限**运行
-- **服务管理**：`systemd`（优先）或 `SysVinit`（需存在 `service` 命令）
-- **无需 Python**：服务由 systemd/SysVinit 直接托管
-
-### 下载加速（可选）
-
-安装脚本默认直连 GitHub，国内服务器可通过环境变量接入镜像：
+国内服务器可加下载加速：
 
 ```sh
-# 为 github.com 下载地址增加加速前缀（示例）
 GITHUB_PROXY='https://ghfast.top/' sh kcptun.sh
-
-# 或直接指定 API 与脚本源
-KCPTUN_RELEASES_API='https://your-mirror/api/repos/tobycroft/kcptun/releases' \
-KCPTUN_SCRIPT_BASE_URL='https://your-mirror/kcptun-script/raw/main' \
-sh kcptun.sh
 ```
 
-### 命令行参数
+脚本需要访问 GitHub 获取版本信息与二进制，下载失败会自动重试 3 次。
 
-* 帮助信息
+---
+
+## 常用命令
+
+| 命令 | 作用 |
+| --- | --- |
+| `sh kcptun.sh` / `install` | 安装；已安装时进入管理菜单 |
+| `sh kcptun.sh uninstall` | 卸载服务与配置 |
+| `sh kcptun.sh check` | 仅检查脚本与 Kcptun 是否有新版本 |
+| `sh kcptun.sh update` | 检查并执行更新 |
+| `sh kcptun.sh migrate` | 将旧版 Supervisor 部署迁移到 systemd / SysVinit |
+| `sh kcptun.sh manual [tag]` | 安装指定 Kcptun 版本（如 `v20160904`） |
+| `sh kcptun.sh add` | 添加一个实例 |
+| `sh kcptun.sh reconfig <id>` | 重新配置实例 |
+| `sh kcptun.sh show <id>` | 查看实例配置 |
+| `sh kcptun.sh log <id>` | 实时查看实例日志 |
+| `sh kcptun.sh del <id>` | 删除实例 |
+| `sh kcptun.sh help` | 查看帮助 |
+
+实例 `id` 省略时默认为 1，对应服务名 `kcptun`，其余为 `kcptun2`、`kcptun3`…
+
+服务操作：
 
 ```sh
-# sh kcptun.sh help
-请使用: kcptun.sh <option>
+# systemd
+systemctl {start|stop|restart|status} kcptun<id>
+systemctl {enable|disable} kcptun<id>
 
-可使用的参数 <option> 包括:
-
-    install          安装
-    uninstall        卸载
-    check            仅检查脚本与 Kcptun 是否有新版本
-    update           检查并执行更新
-    migrate          迁移旧版 Supervisor 部署到 systemd/SysVinit
-    manual           自定义 Kcptun 版本安装
-    help             查看脚本使用说明
-    add              添加一个实例, 多端口加速
-    reconfig <id>    重新配置实例
-    show <id>        显示实例详细配置
-    log <id>         显示实例日志
-    del <id>         删除一个实例
-
-注: 上述参数中的 <id> 可选, 代表的是实例的ID
-    可使用 1, 2, 3 ... 分别对应实例 kcptun, kcptun2, kcptun3 ...
-    若不指定 <id>, 则默认为 1
-
-Kcptun 服务管理命令 (systemd):
-    systemctl {start|stop|restart|status} kcptun<id>
-    systemctl {enable|disable} kcptun<id>
-
-Kcptun 服务管理命令 (SysVinit):
-    service kcptun<id> {start|stop|restart|status}
+# SysVinit
+service kcptun<id> {start|stop|restart|status}
 ```
 
-### 版本与发布
+---
 
-脚本使用三个独立版本号，分别定义在 `kcptun.sh` 头部与仓库根目录的 `version.json` 中：
+## 配置参数
+
+交互式配置会依次引导以下参数，均有默认值：
+
+| 参数 | 说明 | 默认 |
+| --- | --- | --- |
+| listen | 监听端口，支持范围如 `30000-35000` | `29900` |
+| target | 加速地址（主机名 / IPv4 / IPv6）与端口 | `127.0.0.1:12984` |
+| key | 连接密码，两端必须一致 | `very fast` |
+| crypt | aes / aes-128 / aes-192 / salsa20 / blowfish / twofish / cast5 / 3des / tea / xtea / xor / none | `aes` |
+| mode | normal / fast / fast2 / fast3 / manual | `fast` |
+| mtu | UDP 包最大传输单元 | `1350` |
+| sndwnd / rcvwnd | 发送 / 接收窗口大小 | `512` |
+| datashard | FEC 数据分片数，常规保持 10 | `10` |
+| parityshard | FEC 冗余分片数，0 关闭 FEC | `3` |
+| nocomp | 关闭数据压缩（代理套壳流量建议关闭） | `true` |
+| tcp | 使用 TCP 传输（开启后以 root 运行） | `false` |
+| snmp / pprof | 是否记录 SNMP 日志 / 开启性能监控 | 否 / `false` |
+
+FEC 取值参考：丢包 1%~5% 用 `parityshard 2~3`，5%~10% 用 `4~6`，超过 10% 用 `8~10`；流量开销约为 `(datashard + parityshard) / datashard`。
+
+隐藏参数（acknodelay、sockbuf、smuxbuf、keepalive、smuxver、streambuf）通常保持默认即可。
+
+---
+
+## 文件布局
+
+| 路径 | 说明 |
+| --- | --- |
+| `/usr/local/kcptun/` | 安装目录（二进制、`bin/jq`、各实例配置） |
+| `/usr/local/kcptun/server-config<id>.json` | 实例配置文件 |
+| `/var/log/kcptun/server<id>.log` | 实例运行日志 |
+| `/var/log/kcptun/snmplog<id>.log` | SNMP 日志（可选） |
+| `/etc/systemd/system/kcptun<id>.service` | systemd unit（SysVinit 下为 `/etc/init.d/kcptun<id>`） |
+
+---
+
+## 版本与更新
+
+脚本维护三个独立版本号，定义在 `kcptun.sh` 头部与 `version.json`：
 
 | 版本 | 含义 | 当前值 |
 | --- | --- | --- |
 | `shell_version` | 安装脚本版本 | `31` |
-| `config_version` | 服务端配置文件格式版本 | `7` |
-| `init_version` | 服务文件（systemd unit / init 脚本）版本 | `4` |
+| `config_version` | 服务端配置格式版本 | `7` |
+| `init_version` | 服务文件版本 | `4` |
 
-- `sh kcptun.sh check`：读取 `version.json` 并对比本地版本，仅输出检查结果，不修改任何文件
-- `sh kcptun.sh update`：执行更新；脚本更新会先下载到临时文件，若 `version.json` 提供了 `shell_sha256` 会先校验，再替换当前脚本，下载或校验失败不会破坏现有文件
+- `check`：读取 `version.json` 对比版本，只输出结果，不修改文件
+- `update`：脚本更新先下载到临时文件并通过 `shell_sha256` 校验，失败不会破坏当前脚本
+- 推送 `v*` tag 后，仓库内的 GitHub Actions 会自动创建对应 Release 并附带 `kcptun.sh`
 
-发布新版本的顺序：
+发布新版本：修改版本号 → 更新 `version.json` → 提交 → `git tag -a vXX && git push origin main --tags`。
 
-1. 修改 `kcptun.sh` 中的 `SHELL_VERSION`（必要时同时修改 `CONFIG_VERSION` / `INIT_VERSION`）
-2. 同步更新 `version.json` 的版本号、`change_log`、`shell_url`、`shell_sha256` 与 `release_url`
-3. 提交后创建并推送 tag：`git tag -a v31 -m "kcptun-script v31" && git push origin main --tags`
-4. 在 GitHub Releases 页面基于该 tag 创建 Release，粘贴 `change_log` 作为更新说明
+---
 
-### 旧版 Supervisor 迁移
-
-从 Supervisor 版本升级到 systemd/SysVinit 版本时，可直接执行：
+## 从旧版 Supervisor 迁移
 
 ```sh
 sh kcptun.sh migrate
 ```
 
-- 仅当存在 `/etc/supervisor/conf.d/kcptun*.conf` 时才执行；已经是新部署时会直接提示无需迁移，不会做任何修改
-- 沿用 `/usr/local/kcptun/server-config<id>.json`，不重新下载、不重新输入参数，迁移期间服务短暂中断
-- 旧配置会备份到 `/usr/local/kcptun/.legacy-supervisor/`，新服务启动成功后才删除原文件
-- 迁移成功后写入 `/usr/local/kcptun/.supervisor-migrated`（标记 `MIGRATE_VERSION=100`）
-- Supervisor 若还在托管其他程序会自动跳过卸载；否则会询问是否卸载 supervisord
+- 仅在存在 `/etc/supervisor/conf.d/kcptun*.conf` 时执行；已是新部署会直接提示无需迁移
+- 沿用现有 `server-config<id>.json`，不重新输入参数，迁移期间服务短暂中断
+- 旧配置备份到 `/usr/local/kcptun/.legacy-supervisor/`，新服务启动成功后才删除
+- 迁移成功后写入 `.supervisor-migrated`（`MIGRATE_VERSION=100`）
+- Supervisor 若还托管其他程序会自动跳过卸载，否则询问是否卸载
 
-### 交互式配置项
+> 直接运行 `sh kcptun.sh` 时也会自动检测并迁移，不会要求重新配置。
 
-安装/添加实例/重新配置时会依次引导以下参数：
+---
 
-| 参数 | 说明 | 默认值 |
-| --- | --- | --- |
-| listen（端口） | 服务端监听端口，新版支持端口范围，如 `30000-35000` | `29900` |
-| target（加速地址） | 需要加速的地址，支持主机名、IPv4、IPv6 | `127.0.0.1` |
-| target（加速端口） | 需要加速的端口，不能与监听端口相同 | `12984` |
-| key（密码） | 连接密码，两端必须一致 | `very fast` |
-| crypt（加密方式） | aes / aes-128 / aes-192 / salsa20 / blowfish / twofish / cast5 / 3des / tea / xtea / xor / none | `aes` |
-| mode（加速模式） | normal / fast / fast2 / fast3 / manual（手动档可配置隐藏参数） | `fast` |
-| mtu | UDP 数据包最大传输单元 | `1350` |
-| sndwnd | 发送窗口大小（数据包数量） | `512` |
-| rcvwnd | 接收窗口大小（数据包数量） | `512` |
-| datashard | 前向纠错数据分片数（通常 1~64），常规保持 10；越大吞吐越高但重组延迟与内存占用增加，两端必须一致 | `10` |
-| parityshard | 前向纠错冗余分片数，0 关闭 FEC；丢包 1%~5% 建议 2~3，5%~10% 建议 4~6，超过 10% 建议 8~10，两端必须一致 | `3` |
-| dscp | 差分服务代码点 | `0` |
-| nocomp | 是否关闭数据压缩（文本类数据可开启，代理套壳流量建议关闭） | `true` |
-| quiet | 是否屏蔽 open/close 日志输出 | `false` |
-| tcp | 是否使用 TCP 传输（开启后以 root 运行） | `false` |
-| snmp | 是否记录 SNMP 日志（可设置记录间隔 `snmpperiod`） | 否 |
-| pprof | 是否开启 pprof 性能监控（`http://IP:6060/debug/pprof/`） | `false` |
-| 隐藏参数 | acknodelay / sockbuf / smuxbuf / keepalive / smuxver / streambuf，通常保持默认即可 | 见脚本内默认值 |
+## 常见问题
 
-选择 `manual` 加速模式时可额外配置：
+- **端口被占用**：配置监听端口时会检测占用并提示重新输入
+- **低端口**：监听端口 ≤ 1024 或开启 TCP 模式时，服务自动以 root 运行
+- **防火墙**：自动识别 firewalld / ufw / iptables；已关闭的防火墙不会被启动或重启，失败时输出手动命令
+- **下载失败**：设置 `GITHUB_PROXY` 或 `KCPTUN_RELEASES_API` 使用镜像
+- **版本回退**：`sh kcptun.sh manual` 输入完整 TAG 即可安装历史版本
 
-| 参数 | 说明 | 默认值 |
-| --- | --- | --- |
-| nodelay | 是否启用 nodelay 模式 | `1`（启用） |
-| interval | 协议内部工作间隔（ms） | `20` |
-| resend | 快速重传模式：0 不启用 / 1 启用 / 2 跨越 2 次 ACK 直接重传 | `2` |
-| nc | 是否关闭流控 | `1`（关闭流控） |
+---
 
-### 文件路径说明
+## 相关链接
 
-| 路径 | 说明 |
-| --- | --- |
-| `/usr/local/kcptun/` | Kcptun 安装目录（含 `server_linux_amd64` 等可执行文件与 `bin/jq`） |
-| `/usr/local/kcptun/server-config<id>.json` | 各实例服务端配置文件 |
-| `/var/log/kcptun/server<id>.log` | 各实例运行日志 |
-| `/var/log/kcptun/snmplog<id>.log` | SNMP 日志（可选） |
-| `/etc/systemd/system/kcptun<id>.service` | 各实例 systemd unit（SysVinit 下为 `/etc/init.d/kcptun<id>`） |
-
-> 若检测到旧版安装目录 `/usr/share/kcptun`，脚本会自动将文件迁移至 `/usr/local/kcptun`。
-
-### 安装后输出
-
-安装成功后，脚本会自动输出：
-
-1. 服务器 IP、监听端口、加速地址及全部生效参数
-2. 当前安装的 Kcptun 版本号及对应客户端下载地址
-3. **客户端 JSON 配置文件**（`localaddr` 对应服务端加速端口，`remoteaddr` 对应服务器 IP + 监听端口，收发窗口自动对调）
-4. **手机端参数字符串**（如 `key=very fast;crypt=aes;mode=fast;...`，可直接填入支持 Kcptun 的手机客户端）
-
-### 重复运行脚本
-
-已安装的情况下再次运行脚本，会进入管理菜单：
-
-```text
-(1) 覆盖安装
-(2) 重新配置
-(3) 添加实例(多端口)
-(4) 检查更新
-(5) 查看配置
-(6) 查看日志输出
-(7) 自定义版本安装
-(8) 删除实例
-(9) 完全卸载
-(10) 退出脚本
-```
-
-### 常见问题
-
-- **端口占用**：配置的监听端口若已被占用会提示重新输入
-- **低端口运行**：监听端口 ≤ 1024 时，服务自动以 root 用户运行
-- **旧版 Supervisor 迁移**：从 v26 及更早版本升级时，脚本会提示停止并移除 `/etc/supervisor/conf.d/kcptun*.conf`，避免同一端口重复启动
-- **jq 安装失败**：优先尝试发行版软件包；仍失败时会下载 jq 1.7.1 静态二进制到 `/usr/local/kcptun/bin/jq`
-- **下载失败**：可设置 `GITHUB_PROXY` 或 `KCPTUN_RELEASES_API` 使用镜像；脚本同样会自动重试 3 次
-- **防火墙**：自动识别 firewalld / ufw / iptables 并放行 UDP 端口；已关闭的防火墙不会被脚本启动或重启（ufw 写入配置、iptables 添加临时规则、firewalld 需运行后才能写规则），失败时输出手动命令
-- **版本回退**：使用 `sh kcptun.sh manual` 输入完整 TAG（如 `v20160904`）即可安装指定历史版本
+- 项目仓库：<https://github.com/TuuzNet/kcptun-script>
+- 版本发布：<https://github.com/TuuzNet/kcptun-script/releases>
+- 交流群：94537310
