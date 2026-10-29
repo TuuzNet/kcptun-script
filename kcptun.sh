@@ -8,7 +8,7 @@ export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
 # 版本信息，请勿修改
 # =================
-SHELL_VERSION=33
+SHELL_VERSION=34
 CONFIG_VERSION=7
 INIT_VERSION=4
 # =================
@@ -429,18 +429,22 @@ https_get_quick() {
 # 获取 API 内容
 get_content() {
 	local url="$1"
+	local fatal="${2:-true}"
 	local retry=0
 
 	local content=""
 	get_network_content() {
 		if [ $retry -ge 3 ]; then
-			cat >&2 <<-EOF
-			获取网络信息失败!
-			URL: ${url}
-			安装脚本需要能访问 GitHub，请检查服务器网络。
-			国内服务器可设置 GITHUB_PROXY 或 KCPTUN_RELEASES_API 使用镜像。
-			EOF
-			exit 1
+			if [ "$fatal" = "true" ]; then
+				cat >&2 <<-EOF
+				获取网络信息失败!
+				URL: ${url}
+				安装脚本需要能访问 GitHub，请检查服务器网络。
+				国内服务器可设置 GITHUB_PROXY 或 KCPTUN_RELEASES_API 使用镜像。
+				EOF
+				exit 1
+			fi
+			return 1
 		fi
 
 		# 将所有的换行符替换为自定义标签，防止 jq 解析失败
@@ -452,7 +456,7 @@ get_content() {
 		fi
 	}
 
-	get_network_content
+	get_network_content || return 1
 	echo "$content"
 }
 
@@ -792,15 +796,16 @@ disable_instance_service() {
 # 传入 Kcptun 版本号
 get_kcptun_version_info() {
 	local request_version="$1"
+	local fatal="${2:-true}"
 
 	local version_content=""
 	if [ -n "$request_version" ]; then
 		local json_content=""
-		json_content="$(get_content "${KCPTUN_RELEASES_API}?per_page=100")"
+		json_content="$(get_content "${KCPTUN_RELEASES_API}?per_page=100" "$fatal")"
 		local version_selector=".[] | select(.tag_name == \"${request_version}\")"
 		version_content="$(get_json_string "$json_content" "$version_selector")"
 	else
-		version_content="$(get_content "$KCPTUN_LATEST_RELEASE_URL")"
+		version_content="$(get_content "$KCPTUN_LATEST_RELEASE_URL" "$fatal")"
 	fi
 
 	if [ -z "$version_content" ]; then
@@ -858,8 +863,9 @@ get_kcptun_checksum() {
 
 # 获取脚本版本信息
 get_shell_version_info() {
+	local fatal="${1:-true}"
 	local shell_version_content=""
-	shell_version_content="$(get_content "$SHELL_VERSION_INFO_URL")"
+	shell_version_content="$(get_content "$SHELL_VERSION_INFO_URL" "$fatal")"
 	if [ -z "$shell_version_content" ]; then
 		return 1
 	fi
@@ -2817,33 +2823,42 @@ get_installed_version() {
 	fi
 }
 
-# 启动时提示 Kcptun 新版本，网络不可用时静默跳过
-check_kcptun_update_notice() {
-	local content=""
-	content="$(https_get_quick "$KCPTUN_LATEST_RELEASE_URL" 2>/dev/null | sed -r 's/(\\r)?\\n/#br#/g')"
-	if [ -z "$content" ]; then
-		return 0
+# 启动时提示可用更新（脚本 / Kcptun），仅提示，网络不可用时静默跳过
+check_update_notice() {
+	local notices=""
+
+	local shell_content=""
+	shell_content="$(https_get_quick "$SHELL_VERSION_INFO_URL" 2>/dev/null | sed -r 's/(\\r)?\\n/#br#/g')"
+	if [ -n "$shell_content" ]; then
+		local remote_shell=""
+		remote_shell="$(echo "$shell_content" | grep -oE '"shell_version"[[:space:]]*:[[:space:]]*[0-9]+' | head -n 1 | grep -oE '[0-9]+$')"
+		if is_number "$remote_shell" && [ "$remote_shell" -gt "$SHELL_VERSION" ]; then
+			notices="${notices}  - 安装脚本: v${SHELL_VERSION} -> v${remote_shell}\n"
+		fi
 	fi
 
-	local remote_tag=""
-	remote_tag="$(echo "$content" | grep -oE '"tag_name"[[:space:]]*:[[:space:]]*"[^"]+"' | head -n 1 | sed 's/.*"\([^"]*\)"$/\1/')"
-	if [ -z "$remote_tag" ]; then
-		return 0
+	local kcptun_content=""
+	kcptun_content="$(https_get_quick "$KCPTUN_LATEST_RELEASE_URL" 2>/dev/null | sed -r 's/(\\r)?\\n/#br#/g')"
+	if [ -n "$kcptun_content" ]; then
+		local remote_tag=""
+		remote_tag="$(echo "$kcptun_content" | grep -oE '"tag_name"[[:space:]]*:[[:space:]]*"[^"]+"' | head -n 1 | sed 's/.*"\([^"]*\)"$/\1/')"
+		local local_tag=""
+		local_tag="$(get_installed_version)"
+		if [ -n "$remote_tag" ] && [ -n "$local_tag" ] && [ "$remote_tag" != "$local_tag" ]; then
+			notices="${notices}  - Kcptun:   ${local_tag} -> ${remote_tag}\n"
+		fi
 	fi
 
-	local local_tag=""
-	local_tag="$(get_installed_version)"
-	if [ -z "$local_tag" ] || [ "$local_tag" = "$remote_tag" ]; then
-		return 0
+	if [ -n "$notices" ]; then
+		cat >&1 <<-EOF
+
+		========================================================
+		发现可用更新:
+		$(printf '%b' "$notices")
+		可在菜单中选择 (4) 更新菜单，或运行 sh $0 update
+		========================================================
+		EOF
 	fi
-
-	cat >&1 <<-EOF
-
-	========================================================
-	发现 Kcptun 新版本: ${local_tag} -> ${remote_tag}
-	按 4 回车即可检查并更新，也可直接运行: sh $0 update
-	========================================================
-	EOF
 }
 
 # 加载当前选择实例的配置文件
@@ -3246,84 +3261,95 @@ do_check() {
 }
 
 # 更新
-do_update() {
-	pre_ckeck
-
-	cat >&1 <<-EOF
-	你选择了检查更新, 正在开始操作...
-	EOF
-
-	if get_shell_version_info; then
-		local shell_path=$0
-
-		if [ "$new_shell_version" -gt "$SHELL_VERSION" ]; then
-			cat >&1 <<-EOF
-			发现一键安装脚本更新: v${SHELL_VERSION} -> v${new_shell_version}
-			更新说明:
-			$(printf '%s\n' "$shell_change_log")
-			EOF
-
-			if [ -n "$shell_release_url" ]; then
-				cat >&1 <<-EOF
-				发布页面: ${shell_release_url}
-				EOF
-			fi
-
-			any_key_to_continue
-
-			# 先下载到临时文件，校验通过后再替换，避免更新失败导致脚本丢失
-			local new_shell_path="${shell_path}.new"
-			download_file "$new_shell_url" "$new_shell_path" "$new_shell_sha256"
-			chmod a+x "$new_shell_path"
-
-			mv -f "$shell_path" "$shell_path".bak
-			mv -f "$new_shell_path" "$shell_path"
-
-			sed -i -r "s/^CONFIG_VERSION=[0-9]+/CONFIG_VERSION=${CONFIG_VERSION}/" "$shell_path"
-			sed -i -r "s/^INIT_VERSION=[0-9]+/INIT_VERSION=${INIT_VERSION}/" "$shell_path"
-			rm -f "$shell_path".bak
-
-			clear
-			cat >&1 <<-EOF
-			安装脚本已更新到 v${new_shell_version}, 正在运行新的脚本...
-			EOF
-
-			bash "$shell_path" update
-			exit 0
-		fi
-
-		if [ $new_config_version -gt $CONFIG_VERSION ]; then
-			cat >&1 <<-EOF
-			发现 Kcptun 配置更新, 版本号: v${new_config_version}
-			更新说明:
-			$(printf '%s\n' "$config_change_log")
-			需要重新设置 Kcptun
-			EOF
-			any_key_to_continue
-
-			instance_reconfig
-
-			sed -i "s/^CONFIG_VERSION=${CONFIG_VERSION}/CONFIG_VERSION=${new_config_version}/" \
-				"$shell_path"
-		fi
-
-		if [ $new_init_version -gt $INIT_VERSION ]; then
-			cat >&1 <<-EOF
-			发现服务启动脚本文件更新, 版本号: v${new_init_version}
-			更新说明:
-			$(printf '%s\n' "$init_change_log")
-			EOF
-
-			any_key_to_continue
-
-			regenerate_service_files
-			sed -i "s/^INIT_VERSION=${INIT_VERSION}/INIT_VERSION=${new_init_version}/" \
-				"$shell_path"
-		fi
+# 更新安装脚本（含配置模板与服务文件版本）
+# 脚本本体更新完成后直接退出，避免继续使用旧进程逻辑
+update_script_component() {
+	if ! get_shell_version_info false; then
+		cat >&2 <<-EOF
+		获取安装脚本版本信息失败，请检查网络后重试。
+		EOF
+		return 1
 	fi
 
+	local shell_path="$0"
+
+	if [ "$new_shell_version" -gt "$SHELL_VERSION" ]; then
+		cat >&1 <<-EOF
+		发现一键安装脚本更新: v${SHELL_VERSION} -> v${new_shell_version}
+		更新说明:
+		$(printf '%s\n' "$shell_change_log")
+		EOF
+
+		if [ -n "$shell_release_url" ]; then
+			cat >&1 <<-EOF
+			发布页面: ${shell_release_url}
+			EOF
+		fi
+
+		any_key_to_continue
+
+		# 先下载到临时文件，校验通过后再替换，避免更新失败导致脚本丢失
+		local new_shell_path="${shell_path}.new"
+		download_file "$new_shell_url" "$new_shell_path" "$new_shell_sha256"
+		chmod a+x "$new_shell_path"
+
+		mv -f "$shell_path" "$shell_path".bak
+		mv -f "$new_shell_path" "$shell_path"
+
+		sed -i -r "s/^CONFIG_VERSION=[0-9]+/CONFIG_VERSION=${CONFIG_VERSION}/" "$shell_path"
+		sed -i -r "s/^INIT_VERSION=[0-9]+/INIT_VERSION=${INIT_VERSION}/" "$shell_path"
+		rm -f "$shell_path".bak
+
+		clear
+		cat >&1 <<-EOF
+		安装脚本已更新到 v${new_shell_version}。
+		请重新运行 'sh $0 update'，以完成配置模板与服务文件的更新。
+		EOF
+
+		exit 0
+	fi
+
+	if [ "$new_config_version" -gt "$CONFIG_VERSION" ]; then
+		cat >&1 <<-EOF
+		发现 Kcptun 配置更新, 版本号: v${new_config_version}
+		更新说明:
+		$(printf '%s\n' "$config_change_log")
+		需要重新设置 Kcptun
+		EOF
+		any_key_to_continue
+
+		instance_reconfig
+
+		sed -i "s/^CONFIG_VERSION=${CONFIG_VERSION}/CONFIG_VERSION=${new_config_version}/" \
+			"$shell_path"
+	fi
+
+	if [ "$new_init_version" -gt "$INIT_VERSION" ]; then
+		cat >&1 <<-EOF
+		发现服务启动脚本文件更新, 版本号: v${new_init_version}
+		更新说明:
+		$(printf '%s\n' "$init_change_log")
+		EOF
+
+		any_key_to_continue
+
+		regenerate_service_files
+		sed -i "s/^INIT_VERSION=${INIT_VERSION}/INIT_VERSION=${new_init_version}/" \
+			"$shell_path"
+	fi
+
+	return 0
+}
+
+# 更新 Kcptun 主程序
+update_kcptun_component() {
 	echo "开始获取 Kcptun 版本信息..."
-	get_kcptun_version_info
+	if ! get_kcptun_version_info "" false; then
+		cat >&2 <<-EOF
+		获取 Kcptun 版本信息失败，请检查网络后重试。
+		EOF
+		return 1
+	fi
 
 	local cur_tag_name=""
 	cur_tag_name="$(get_installed_version)"
@@ -3332,24 +3358,113 @@ do_update() {
 		cur_tag_name=v"$cur_tag_name"
 	fi
 
-	if [ -n "$kcptun_release_tag_name" ] && [ "$kcptun_release_tag_name" != "$cur_tag_name" ]; then
+	if [ -z "$kcptun_release_tag_name" ] || [ "$kcptun_release_tag_name" = "$cur_tag_name" ]; then
 		cat >&1 <<-EOF
-		发现 Kcptun 新版本 ${kcptun_release_tag_name}
-		$([ "$kcptun_release_prerelease" = "true" ] && printf "\033[41;37m 注意: 该版本为预览版, 请谨慎更新 \033[0m")
-		更新说明:
-		$(printf '%s\n' "$kcptun_release_body")
+		未发现 Kcptun 更新，当前版本: ${cur_tag_name}
 		EOF
-		any_key_to_continue
-
-		install_kcptun
-		apply_service_config
-
-		show_version_and_client_url
-	else
-		cat >&1 <<-'EOF'
-		未发现 Kcptun 更新...
-		EOF
+		return 0
 	fi
+
+	cat >&1 <<-EOF
+	发现 Kcptun 新版本 ${kcptun_release_tag_name}
+	$([ "$kcptun_release_prerelease" = "true" ] && printf "\033[41;37m 注意: 该版本为预览版, 请谨慎更新 \033[0m")
+	更新说明:
+	$(printf '%s\n' "$kcptun_release_body")
+	EOF
+	any_key_to_continue
+
+	install_kcptun
+	apply_service_config
+
+	show_version_and_client_url
+	return 0
+}
+
+# 更新菜单：分别管理安装脚本与 Kcptun 的更新
+do_update_menu() {
+	pre_ckeck
+
+	while true
+	do
+		local shell_status="获取失败"
+		local kcptun_status="获取失败"
+		local shell_available="false"
+		local kcptun_available="false"
+
+		if get_shell_version_info false; then
+			if is_number "$new_shell_version" && [ "$new_shell_version" -gt "$SHELL_VERSION" ]; then
+				shell_status="v${SHELL_VERSION} -> v${new_shell_version}"
+				shell_available="true"
+			else
+				shell_status="v${SHELL_VERSION} (已是最新)"
+			fi
+		fi
+
+		if get_kcptun_version_info "" false; then
+			local cur_tag_name=""
+			cur_tag_name="$(get_installed_version)"
+			if [ -n "$kcptun_release_tag_name" ] && [ "$kcptun_release_tag_name" != "$cur_tag_name" ]; then
+				kcptun_status="${cur_tag_name} -> ${kcptun_release_tag_name}"
+				kcptun_available="true"
+			else
+				kcptun_status="${cur_tag_name} (已是最新)"
+			fi
+		fi
+
+		cat >&1 <<-EOF
+
+		==================== 更新管理 ====================
+		安装脚本: ${shell_status}
+		Kcptun:    ${kcptun_status}
+		--------------------------------------------------
+		(1) 更新安装脚本
+		(2) 更新 Kcptun
+		(3) 全部更新
+		(4) 返回
+		EOF
+
+		local sel=""
+		read -p "(默认: 4) 请选择 [1~4]: " sel
+		[ -z "$sel" ] && sel="4"
+
+		case "$(first_character "$sel")" in
+			1)
+				if [ "$shell_available" != "true" ]; then
+					echo "当前没有可用的安装脚本更新。"
+					continue
+				fi
+				update_script_component
+				;;
+			2)
+				if [ "$kcptun_available" != "true" ]; then
+					echo "当前没有可用的 Kcptun 更新。"
+					continue
+				fi
+				update_kcptun_component
+				any_key_to_continue
+				;;
+			3)
+				update_kcptun_component
+				update_script_component
+				any_key_to_continue
+				;;
+			*)
+				return 0
+				;;
+		esac
+	done
+}
+
+# 更新（命令行入口：先更新 Kcptun，最后更新脚本）
+do_update() {
+	pre_ckeck
+
+	cat >&1 <<-EOF
+	你选择了更新, 正在开始操作...
+	EOF
+
+	update_kcptun_component
+	update_script_component
 }
 
 # 添加实例
@@ -3707,7 +3822,7 @@ installed_check() {
 		检测到你已安装 Kcptun 服务端, 已配置的实例个数为 ${instance_count} 个
 		EOF
 
-		check_kcptun_update_notice
+		check_update_notice
 
 		while true
 		do
@@ -3716,7 +3831,7 @@ installed_check() {
 			(1) 覆盖安装
 			(2) 重新配置
 			(3) 添加实例(多端口)
-			(4) 检查并更新
+			(4) 更新菜单
 			(5) 查看配置
 			(6) 查看日志输出
 			(7) 自定义版本安装
@@ -3741,7 +3856,8 @@ installed_check() {
 					instance_add
 					;;
 				4)
-					do_update
+					do_update_menu
+					continue
 					;;
 				5)
 					select_instance
