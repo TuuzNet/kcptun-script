@@ -8,7 +8,7 @@ export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
 # 版本信息，请勿修改
 # =================
-SHELL_VERSION=37
+SHELL_VERSION=38
 CONFIG_VERSION=7
 INIT_VERSION=4
 # =================
@@ -130,6 +130,7 @@ usage() {
 	    show <id>        显示实例详细配置
 	    log <id>         显示实例日志
 	    del <id>         删除一个实例
+	    losstest <id>    丢包测试(需客户端同版本配合)
 
 	注: 上述参数中的 <id> 可选, 代表的是实例的ID
 	    可使用 1, 2, 3 ... 分别对应实例 kcptun, kcptun2, kcptun3 ...
@@ -3656,6 +3657,179 @@ instance_log() {
 	fi
 }
 
+# 将字符串安全地放进 shell 单引号中
+losstest_shell_quote() {
+	printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"
+}
+
+# 查找本机可用的 kcptun client 二进制
+losstest_find_client() {
+	local bin=""
+	if [ -z "$file_suffix" ]; then
+		get_arch
+	fi
+	for bin in \
+		"${KCPTUN_INSTALL_DIR}/client_${file_suffix}" \
+		"${KCPTUN_INSTALL_DIR}/client" \
+		"${KCPTUN_INSTALL_DIR}/kcptun-client"; do
+		if [ -x "$bin" ]; then
+			printf '%s' "$bin"
+			return 0
+		fi
+	done
+	if command_exists kcptun-client; then
+		command -v kcptun-client
+		return 0
+	fi
+	return 1
+}
+
+# 生成客户端丢包测试命令
+# $1: 时长 $2: 强度 $3: 服务端 IP $4: client 二进制
+losstest_build_command() {
+	local duration="$1"
+	local rate="$2"
+	local server_ip="$3"
+	local bin="$4"
+
+	# 客户端发送窗口对应服务端接收窗口，反之亦然
+	local c_sndwnd="${rcvwnd:-$D_RCVWND}"
+	local c_rcvwnd="${sndwnd:-$D_SNDWND}"
+	local cmd=""
+
+	cmd="${bin} -losstest -losstest-duration ${duration} -losstest-rate ${rate}"
+	cmd="${cmd} -remoteaddr $(losstest_shell_quote "${server_ip}:${listen_port}")"
+	cmd="${cmd} -key $(losstest_shell_quote "${key:-$D_KEY}")"
+	cmd="${cmd} -crypt ${crypt:-$D_CRYPT} -mode ${mode:-$D_MODE} -mtu ${mtu:-$D_MTU}"
+	cmd="${cmd} -sndwnd ${c_sndwnd} -rcvwnd ${c_rcvwnd}"
+	cmd="${cmd} -datashard ${datashard:-$D_DATASHARD} -parityshard ${parityshard:-$D_PARITYSHARD}"
+	cmd="${cmd} -smuxver ${smuxver:-$D_SMUXVER}"
+	cmd="${cmd} -nodelay ${nodelay:-$D_NODELAY} -interval ${interval:-$D_INTERVAL} -resend ${resend:-$D_RESEND} -nc ${nc:-$D_NC}"
+	cmd="${cmd} -sockbuf ${sockbuf:-$D_SOCKBUF} -smuxbuf ${smuxbuf:-$D_SMUXBUF} -streambuf ${streambuf:-$D_STREAMBUF} -keepalive ${keepalive:-$D_KEEPALIVE}"
+	if [ "${acknodelay:-$D_ACKNODELAY}" = 'true' ]; then
+		cmd="${cmd} -acknodelay"
+	fi
+	if [ "${nocomp:-$D_NOCOMP}" = 'true' ]; then
+		cmd="${cmd} -nocomp"
+	fi
+	if [ "${tcp:-$D_TCP}" = 'true' ]; then
+		cmd="${cmd} -tcp"
+	fi
+	cmd="${cmd} -quiet"
+	printf '%s\n' "$cmd"
+}
+
+# 丢包测试入口
+losstest_run() {
+	local arg_id="$1"
+
+	pre_ckeck
+
+	if [ -n "$arg_id" ]; then
+		if ! is_number "$arg_id"; then
+			cat >&2 <<-EOF
+			参数有误, 请使用 $0 losstest <id>
+			<id> 为实例ID, 当前共有 $(get_instance_count) 个实例
+			EOF
+			exit 1
+		fi
+		if [ "$arg_id" != "1" ]; then
+			current_instance_id="$arg_id"
+		fi
+		if [ ! -f "$(get_current_file 'config')" ]; then
+			cat >&2 <<-EOF
+			实例 kcptun${current_instance_id} 不存在!
+			EOF
+			exit 1
+		fi
+	else
+		select_instance
+	fi
+
+	load_instance_config
+
+	local ds="${datashard:-$D_DATASHARD}"
+	local ps="${parityshard:-$D_PARITYSHARD}"
+	if [ "$ds" -le 0 ] || [ "$ps" -le 0 ]; then
+		cat >&2 <<-EOF
+		当前实例未启用 FEC（datashard=${ds}, parityshard=${ps}）。
+		丢包测试依赖 KCP OOB，服务端和客户端都必须开启 FEC。
+		EOF
+		return 1
+	fi
+
+	local sel=""
+	cat >&1 <<-'EOF'
+	请选择测试时长:
+	(1) 15 秒
+	(2) 30 秒
+	(3) 60 秒
+	EOF
+	read -p "(默认: 1) 请选择 [1~3]: " sel
+	local duration=15
+	case "$(first_character "$sel")" in
+		2) duration=30 ;;
+		3) duration=60 ;;
+	esac
+
+	cat >&1 <<-'EOF'
+	请选择发包强度:
+	(1) 低度 (100 pps, 约 0.1 Mbps)
+	(2) 中度 (1000 pps, 约 1 Mbps)
+	(3) 全速 (约 20000 pps, 约 20 Mbps)
+	EOF
+	read -p "(默认: 1) 请选择 [1~3]: " sel
+	local rate="low"
+	case "$(first_character "$sel")" in
+		2) rate="mid" ;;
+		3) rate="full" ;;
+	esac
+
+	local server_ip=""
+	server_ip="$(get_server_ip)"
+	if [ -z "$server_ip" ]; then
+		read -p "未能自动获取服务器公网 IP, 请手动输入: " server_ip
+	fi
+	if [ -z "$server_ip" ]; then
+		echo "未提供服务端 IP, 已取消丢包测试。"
+		return 1
+	fi
+
+	local remote_cmd=""
+	remote_cmd="$(losstest_build_command "$duration" "$rate" "$server_ip" './kcptun-client')"
+
+	cat >&1 <<-EOF
+
+	丢包测试参数: 时长 ${duration} 秒, 强度 ${rate}
+	测试原理: 客户端发送 KCP OOB 探测包(不重传), 服务端原样回射,
+	          根据往返序号缺口统计丢包率并计算 RTT / 抖动。
+
+	请将以下命令复制到客户端机器执行(需要同版本 kcptun-client):
+	${remote_cmd}
+
+	注: 全速档会产生较大流量, 请避免影响生产业务。
+	EOF
+
+	local local_bin=""
+	local_bin="$(losstest_find_client 2>/dev/null || true)"
+	if [ -n "$local_bin" ]; then
+		read -p "是否在本机执行测试? [y/n]: " sel
+		case "$(first_character "$sel")" in
+			y|Y)
+				local local_cmd=""
+				local_cmd="$(losstest_build_command "$duration" "$rate" "$server_ip" "$local_bin")"
+				echo "开始本机丢包测试..."
+				sh -c "$local_cmd"
+				;;
+		esac
+	else
+		cat >&1 <<-EOF
+		本机未找到 kcptun-client 二进制, 无法在本机执行测试;
+		可将 client_${file_suffix} 下载/复制到 ${KCPTUN_INSTALL_DIR}/client 后重试。
+		EOF
+	fi
+}
+
 # 重新配置实例
 instance_reconfig() {
 	pre_ckeck
@@ -3920,12 +4094,13 @@ installed_check() {
 			(4) 更新菜单
 			(5) 查看配置
 			(6) 查看日志输出
-			(7) 自定义版本安装
-			(8) 删除实例
-			(9) 完全卸载
-			(10) 退出脚本
+			(7) 丢包测试
+			(8) 自定义版本安装
+			(9) 删除实例
+			(10) 完全卸载
+			(11) 退出脚本
 			EOF
-			read -p "(默认: 1) 请选择 [1~10]: " sel
+			read -p "(默认: 1) 请选择 [1~11]: " sel
 			[ -z "$sel" ] && sel=1
 
 			case $sel in
@@ -3954,19 +4129,22 @@ installed_check() {
 					instance_log
 					;;
 				7)
-					manual_install
+					losstest_run
 					;;
 				8)
+					manual_install
+					;;
+				9)
 					select_instance
 					instance_del
 					;;
-				9)
+				10)
 					do_uninstall
 					;;
-				10)
+				11)
 					;;
 				*)
-					echo "输入有误, 请输入有效数字 1~10!"
+					echo "输入有误, 请输入有效数字 1~11!"
 					continue
 					;;
 			esac
@@ -3983,6 +4161,9 @@ case "$action" in
 		;;
 	add|reconfig|show|log|del)
 		instance_${action} "$2"
+		;;
+	losstest)
+		losstest_run "$2"
 		;;
 	manual)
 		manual_install "$2"
