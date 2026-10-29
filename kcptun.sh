@@ -2823,6 +2823,16 @@ get_installed_version() {
 	fi
 }
 
+# 统一 Kcptun 版本号格式，8 位纯数字版本自动补 v 前缀
+normalize_kcptun_tag() {
+	local tag="$1"
+	if [ -n "$tag" ] && is_number "$tag" && [ ${#tag} -eq 8 ]; then
+		echo "v${tag}"
+	else
+		echo "$tag"
+	fi
+}
+
 # 启动时提示可用更新（脚本 / Kcptun），仅提示，网络不可用时静默跳过
 check_update_notice() {
 	local notices=""
@@ -2843,9 +2853,11 @@ check_update_notice() {
 		local remote_tag=""
 		remote_tag="$(echo "$kcptun_content" | grep -oE '"tag_name"[[:space:]]*:[[:space:]]*"[^"]+"' | head -n 1 | sed 's/.*"\([^"]*\)"$/\1/')"
 		local local_tag=""
-		local_tag="$(get_installed_version)"
-		if [ -n "$remote_tag" ] && [ -n "$local_tag" ] && [ "$remote_tag" != "$local_tag" ]; then
-			notices="${notices}  - Kcptun:   ${local_tag} -> ${remote_tag}\n"
+		local remote_tag_normalized=""
+		local_tag="$(normalize_kcptun_tag "$(get_installed_version)")"
+		remote_tag_normalized="$(normalize_kcptun_tag "$remote_tag")"
+		if [ -n "$remote_tag_normalized" ] && [ -n "$local_tag" ] && [ "$remote_tag_normalized" != "$local_tag" ]; then
+			notices="${notices}  - Kcptun:   ${local_tag} -> ${remote_tag_normalized}\n"
 		fi
 	fi
 
@@ -3263,6 +3275,7 @@ do_check() {
 # 更新
 # 更新安装脚本（含配置模板与服务文件版本）
 # 脚本本体更新完成后直接退出，避免继续使用旧进程逻辑
+# 返回值: 0 = 已执行更新或迁移, 1 = 获取版本信息失败, 2 = 无可用更新
 update_script_component() {
 	if ! get_shell_version_info false; then
 		cat >&2 <<-EOF
@@ -3272,6 +3285,7 @@ update_script_component() {
 	fi
 
 	local shell_path="$0"
+	local changed="false"
 
 	if [ "$new_shell_version" -gt "$SHELL_VERSION" ]; then
 		cat >&1 <<-EOF
@@ -3322,6 +3336,7 @@ update_script_component() {
 
 		sed -i "s/^CONFIG_VERSION=${CONFIG_VERSION}/CONFIG_VERSION=${new_config_version}/" \
 			"$shell_path"
+		changed="true"
 	fi
 
 	if [ "$new_init_version" -gt "$INIT_VERSION" ]; then
@@ -3336,12 +3351,18 @@ update_script_component() {
 		regenerate_service_files
 		sed -i "s/^INIT_VERSION=${INIT_VERSION}/INIT_VERSION=${new_init_version}/" \
 			"$shell_path"
+		changed="true"
 	fi
 
-	return 0
+	if [ "$changed" = "true" ]; then
+		return 0
+	fi
+
+	return 2
 }
 
 # 更新 Kcptun 主程序
+# 返回值: 0 = 已更新, 1 = 获取版本信息失败, 2 = 无可用更新
 update_kcptun_component() {
 	echo "开始获取 Kcptun 版本信息..."
 	if ! get_kcptun_version_info "" false; then
@@ -3352,17 +3373,13 @@ update_kcptun_component() {
 	fi
 
 	local cur_tag_name=""
-	cur_tag_name="$(get_installed_version)"
-
-	if [ -n "$cur_tag_name" ] && is_number "$cur_tag_name" && [ ${#cur_tag_name} -eq 8 ]; then
-		cur_tag_name=v"$cur_tag_name"
-	fi
+	cur_tag_name="$(normalize_kcptun_tag "$(get_installed_version)")"
 
 	if [ -z "$kcptun_release_tag_name" ] || [ "$kcptun_release_tag_name" = "$cur_tag_name" ]; then
 		cat >&1 <<-EOF
 		未发现 Kcptun 更新，当前版本: ${cur_tag_name}
 		EOF
-		return 0
+		return 2
 	fi
 
 	cat >&1 <<-EOF
@@ -3402,7 +3419,7 @@ do_update_menu() {
 
 		if get_kcptun_version_info "" false; then
 			local cur_tag_name=""
-			cur_tag_name="$(get_installed_version)"
+			cur_tag_name="$(normalize_kcptun_tag "$(get_installed_version)")"
 			if [ -n "$kcptun_release_tag_name" ] && [ "$kcptun_release_tag_name" != "$cur_tag_name" ]; then
 				kcptun_status="${cur_tag_name} -> ${kcptun_release_tag_name}"
 				kcptun_available="true"
@@ -3440,13 +3457,25 @@ do_update_menu() {
 					echo "当前没有可用的 Kcptun 更新。"
 					continue
 				fi
+				local kcptun_rc=0
 				update_kcptun_component
-				any_key_to_continue
+				kcptun_rc=$?
+				# 更新失败时停留一次便于查看错误；无可用更新时直接回到菜单
+				if [ "$kcptun_rc" != "2" ]; then
+					any_key_to_continue
+				fi
 				;;
 			3)
+				local kcptun_rc=0
+				local script_rc=0
 				update_kcptun_component
+				kcptun_rc=$?
 				update_script_component
-				any_key_to_continue
+				script_rc=$?
+				# 两个组件都没有可更新内容时不再要求按键，直接回到更新菜单
+				if [ "$kcptun_rc" != "2" ] || [ "$script_rc" != "2" ]; then
+					any_key_to_continue
+				fi
 				;;
 			*)
 				return 0
@@ -3465,6 +3494,9 @@ do_update() {
 
 	update_kcptun_component
 	update_script_component
+
+	# 仅表示流程已执行完毕，避免把组件的“无可用更新”返回值当成失败退出码
+	return 0
 }
 
 # 添加实例
