@@ -1,7 +1,9 @@
 {
-	"shell_version": 27,
+	"shell_version": 28,
 	"shell_url": "https://github.com/TuuzNet/kcptun-script/raw/main/kcptun.sh",
-	"change_log": "1. 移除 Supervisor，改用 systemd / SysVinit 托管服务;\n2. jq 优先使用系统软件包，缺失时下载官方 1.7.1 二进制;\n3. 支持 arm64 / arm 架构;\n4. 支持 GITHUB_PROXY 加速下载;\n5. 使用 Release 的 checksums.txt 校验服务端二进制",
+	"shell_sha256": "",
+	"release_url": "https://github.com/TuuzNet/kcptun-script/releases",
+	"change_log": "1. 服务管理改为 systemd / SysVinit，不再依赖 python、pip 与 Supervisor;\n2. Kcptun 改用 Release 裸二进制并通过 checksums.txt 校验，新增 arm64 / arm 支持;\n3. 新增 check 命令，可仅检查脚本与 Kcptun 是否有新版本;\n4. 自更新支持 shell_sha256 校验，并展示 GitHub Release 页面;\n5. 交互提示补充 datashard / parityshard 取值建议，手动编辑配置默认使用 nano",
 	"config_version": 7,
 	"config_change_log": "1. 配置文件格式无变化",
 	"init_version": 4,

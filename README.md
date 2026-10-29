@@ -11,7 +11,7 @@ Kcptun 服务端一键安装/管理脚本（2026 版）。基于 KCP 协议，�
 - **多实例管理**：支持添加、删除、重新配置多个 Kcptun 实例，实现多端口同时加速
 - **systemd 原生托管**：自动生成 systemd unit（SysVinit 环境下生成 init 脚本），支持开机自启与崩溃自动拉起，不再依赖 Python 与 Supervisor
 - **自动防火墙配置**：自动检测 firewalld / iptables 并放行 UDP 监听端口
-- **一键更新**：脚本自身、配置模板、服务文件、Kcptun 主程序均可在线检查更新，并展示更新日志
+- **一键更新**：脚本自身、配置模板、服务文件、Kcptun 主程序均可在线检查更新，并展示更新日志；`check` 命令可仅查询是否有新版本而不执行更新
 - **自定义版本安装**：可指定任意 TAG 安装历史版本（不支持 v20160826 及更早版本）
 - **客户端配置生成**：安装完成后自动输出服务端配置、对应的客户端 JSON 配置以及手机端参数字符串
 - **下载加速**：支持 `GITHUB_PROXY` / `KCPTUN_RELEASES_API` / `KCPTUN_SCRIPT_BASE_URL` 环境变量，便于国内服务器接入镜像或反向代理
@@ -75,7 +75,8 @@ sh kcptun.sh
 
     install          安装
     uninstall        卸载
-    update           检查更新
+    check            仅检查脚本与 Kcptun 是否有新版本
+    update           检查并执行更新
     manual           自定义 Kcptun 版本安装
     help             查看脚本使用说明
     add              添加一个实例, 多端口加速
@@ -95,6 +96,26 @@ Kcptun 服务管理命令 (systemd):
 Kcptun 服务管理命令 (SysVinit):
     service kcptun<id> {start|stop|restart|status}
 ```
+
+### 版本与发布
+
+脚本使用三个独立版本号，分别定义在 `kcptun.sh` 头部与仓库根目录的 `version.json` 中：
+
+| 版本 | 含义 | 当前值 |
+| --- | --- | --- |
+| `shell_version` | 安装脚本版本 | `28` |
+| `config_version` | 服务端配置文件格式版本 | `7` |
+| `init_version` | 服务文件（systemd unit / init 脚本）版本 | `4` |
+
+- `sh kcptun.sh check`：读取 `version.json` 并对比本地版本，仅输出检查结果，不修改任何文件
+- `sh kcptun.sh update`：执行更新；脚本更新会先下载到临时文件，若 `version.json` 提供了 `shell_sha256` 会先校验，再替换当前脚本，下载或校验失败不会破坏现有文件
+
+发布新版本的顺序：
+
+1. 修改 `kcptun.sh` 中的 `SHELL_VERSION`（必要时同时修改 `CONFIG_VERSION` / `INIT_VERSION`）
+2. 同步更新 `version.json` 的版本号、`change_log`、`shell_url`、`shell_sha256` 与 `release_url`
+3. 提交后创建并推送 tag：`git tag -a v28 -m "kcptun-script v28" && git push origin main --tags`
+4. 在 GitHub Releases 页面基于该 tag 创建 Release，粘贴 `change_log` 作为更新说明
 
 ### 交互式配置项
 
