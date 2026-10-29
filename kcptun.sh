@@ -56,6 +56,10 @@ SERVICE_BACKEND=''
 # 旧版由 Supervisor 托管，仅用于升级提示
 LEGACY_SUPERVISOR_DIR='/etc/supervisor/conf.d'
 
+# 旧版 Supervisor 迁移版本，设计为较大值，避免与常规版本号冲突
+MIGRATE_VERSION=100
+MIGRATE_MARKER="${KCPTUN_INSTALL_DIR}/.supervisor-migrated"
+
 # 默认参数
 # =======================
 D_LISTEN_PORT=29900
@@ -118,6 +122,7 @@ usage() {
 	    uninstall        卸载
 	    check            仅检查脚本与 Kcptun 是否有新版本
 	    update           检查并执行更新
+	    migrate          迁移旧版 Supervisor 部署到 systemd/SysVinit
 	    manual           自定义 Kcptun 版本安装
 	    help             查看脚本使用说明
 	    add              添加一个实例, 多端口加速
@@ -1005,6 +1010,111 @@ install_service_manager() {
 	migrate_legacy_supervisor
 }
 
+# 是否存在由 Supervisor 托管的其他程序（避免误卸载）
+has_other_supervisor_programs() {
+	local conf=""
+	for conf in "$LEGACY_SUPERVISOR_DIR"/*.conf; do
+		[ -f "$conf" ] || continue
+		case "$(basename "$conf")" in
+			kcptun*.conf) ;;
+			*) return 0 ;;
+		esac
+	done
+
+	return 1
+}
+
+# 列出由 Supervisor 托管的其他程序
+list_other_supervisor_programs() {
+	local conf=""
+	for conf in "$LEGACY_SUPERVISOR_DIR"/*.conf; do
+		[ -f "$conf" ] || continue
+		case "$(basename "$conf")" in
+			kcptun*.conf) ;;
+			*) basename "$conf" ;;
+		esac
+	done
+}
+
+# 迁移完成后卸载旧版 Supervisor
+# 只清理本脚本安装的内容，不删除发行版包管理器维护的二进制
+uninstall_supervisor() {
+	if has_other_supervisor_programs; then
+		cat >&1 <<-EOF
+		Supervisor 仍在管理其他程序，已跳过卸载:
+		$(list_other_supervisor_programs | sed 's/^/  /')
+		如需卸载，请先迁移这些程序。
+		EOF
+		return 0
+	fi
+
+	cat >&1 <<-'EOF'
+	旧版 Supervisor 已不再需要，是否卸载?
+	注意: 会停止并删除 supervisord 服务、/etc/supervisor 目录与命令软链。
+	EOF
+
+	local yn=""
+	read -p "(默认: 卸载) [y/n]: " yn
+	case "$(first_character "$yn")" in
+		n|N)
+			return 0
+			;;
+	esac
+
+	if command_exists systemctl; then
+		systemctl stop supervisord.service >/dev/null 2>&1 || true
+		systemctl disable supervisord.service >/dev/null 2>&1 || true
+	fi
+
+	if command_exists service; then
+		service supervisord stop >/dev/null 2>&1 || true
+	fi
+
+	if command_exists chkconfig; then
+		chkconfig supervisord off >/dev/null 2>&1 || true
+		chkconfig --del supervisord >/dev/null 2>&1 || true
+	fi
+
+	if command_exists update-rc.d; then
+		update-rc.d -f supervisord remove >/dev/null 2>&1 || true
+	fi
+
+	if command_exists pip; then
+		(
+			set -x
+			pip uninstall -y supervisor
+		) >/dev/null 2>&1 || true
+	fi
+
+	(
+		set -x
+		rm -f "$SYSTEMD_UNIT_DIR/supervisord.service" \
+			'/lib/systemd/system/supervisord.service' \
+			'/etc/init.d/supervisord'
+		rm -rf '/etc/supervisor'
+		rm -f '/usr/local/bin/supervisord' \
+			'/usr/local/bin/supervisorctl' \
+			'/usr/local/bin/pidproxy' \
+			'/usr/local/bin/echo_supervisord_conf'
+	)
+	reload_service_manager
+
+	if command_exists dpkg && dpkg -S '/usr/bin/supervisord' >/dev/null 2>&1; then
+		cat >&1 <<-EOF
+		提示: /usr/bin/supervisord 由系统包管理器安装，
+		如需彻底清理请执行: apt-get remove -y supervisor
+		EOF
+	elif command_exists rpm && rpm -q supervisor >/dev/null 2>&1; then
+		cat >&1 <<-EOF
+		提示: supervisor 为系统包，如需彻底清理请执行: yum remove -y supervisor
+		EOF
+	fi
+
+	cat >&1 <<-EOF
+	Supervisor 已卸载。
+	EOF
+}
+
 # 是否存在旧版 Supervisor 托管的实例
 has_legacy_instances() {
 	[ -d "$LEGACY_SUPERVISOR_DIR" ] && \
@@ -1076,27 +1186,32 @@ migrate_legacy_instances() {
 			chown "$run_user" "$log_file" 2>/dev/null || true
 		fi
 
+		# 备份旧配置，便于迁移失败时回滚
+		mkdir -p "${KCPTUN_INSTALL_DIR}/.legacy-supervisor" 2>/dev/null || true
+		cp -f "$conf" "${KCPTUN_INSTALL_DIR}/.legacy-supervisor/" 2>/dev/null || true
+
 		# 生成当前服务管理方式对应的服务文件
 		gen_service_file
 
-		# 停止并移除旧版 Supervisor 配置
+		# 先停止旧实例，但保留旧配置，启动成功后再删除
 		if command_exists supervisorctl; then
 			supervisorctl stop "kcptun${instance_id}" >/dev/null 2>&1 || true
 		fi
-		rm -f "$conf"
 
 		reload_service_manager
 		enable_instance_service "$instance_id"
 
 		if start_instance_service "$instance_id" >/dev/null 2>&1; then
 			migrated=$(expr $migrated + 1)
+			rm -f "$conf"
 			cat >&1 <<-EOF
 			实例 kcptun${instance_id} 已迁移: $(get_current_file 'service')
 			EOF
 		else
 			failed=$(expr $failed + 1)
 			cat >&2 <<-EOF
-			实例 kcptun${instance_id} 启动失败，请使用 '$0 log ${instance_id:-1}' 查看日志。
+			实例 kcptun${instance_id} 启动失败，已保留旧配置: ${conf}
+			可执行 'supervisorctl start kcptun${instance_id}' 回滚，或使用 '$0 log ${instance_id:-1}' 查看日志。
 			EOF
 		fi
 	done
@@ -1111,6 +1226,15 @@ migrate_legacy_instances() {
 	cat >&1 <<-EOF
 	迁移完成: 成功 ${migrated} 个，失败 ${failed} 个。
 	EOF
+
+	if [ "$failed" -eq 0 ]; then
+		echo "$MIGRATE_VERSION" > "$MIGRATE_MARKER" 2>/dev/null || true
+		uninstall_supervisor
+	else
+		cat >&1 <<-'EOF'
+		有实例迁移失败，已保留 Supervisor 配置，暂不卸载 Supervisor。
+		EOF
+	fi
 
 	any_key_to_continue
 }
@@ -2800,6 +2924,42 @@ do_uninstall() {
 	EOF
 }
 
+# 迁移旧版 Supervisor 部署到 systemd / SysVinit
+do_migrate() {
+	check_root
+
+	if ! is_installed; then
+		cat >&2 <<-EOF
+		未检测到已安装的 Kcptun，无法迁移。
+		请先运行 $0 install 安装。
+		EOF
+		exit 1
+	fi
+
+	if ! has_legacy_instances; then
+		if [ "$(get_instance_count)" -gt 0 ]; then
+			cat >&1 <<-EOF
+			当前已是 ${SERVICE_BACKEND} 部署，共 $(get_instance_count) 个实例，
+			无需迁移，也不会重复执行迁移。
+			EOF
+		else
+			cat >&1 <<-EOF
+			未检测到旧版 Supervisor 实例，当前没有需要迁移的内容。
+			EOF
+		fi
+		return 0
+	fi
+
+	if [ -s "$MIGRATE_MARKER" ]; then
+		cat >&1 <<-EOF
+		检测到迁移标记 v$(cat "$MIGRATE_MARKER")，但仍有 Supervisor 实例未迁移，
+		将继续处理剩余实例。
+		EOF
+	fi
+
+	migrate_legacy_instances
+}
+
 # 仅检查脚本与 Kcptun 是否有新版本，不执行更新
 do_check() {
 	check_root
@@ -2846,6 +3006,19 @@ do_check() {
 	fi
 
 	if is_installed; then
+		detect_service_backend
+
+		if has_legacy_instances; then
+			found_update="true"
+			cat >&1 <<-EOF
+			检测到旧版 Supervisor 部署，可执行 '$0 migrate' 迁移到 ${SERVICE_BACKEND}，无需重新配置。
+			EOF
+		else
+			cat >&1 <<-EOF
+			当前已是 ${SERVICE_BACKEND} 部署，无需迁移。
+			EOF
+		fi
+
 		echo "正在检查 Kcptun 版本..."
 		if get_kcptun_version_info; then
 			local cur_tag_name=""
@@ -3410,7 +3583,7 @@ installed_check() {
 
 action=${1:-"install"}
 case "$action" in
-	install|uninstall|update|check)
+	install|uninstall|update|check|migrate)
 		do_${action}
 		;;
 	add|reconfig|show|log|del)
