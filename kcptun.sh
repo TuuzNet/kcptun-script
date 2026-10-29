@@ -1005,7 +1005,117 @@ install_service_manager() {
 	migrate_legacy_supervisor
 }
 
-# 检测并迁移旧版 Supervisor 托管的实例
+# 是否存在旧版 Supervisor 托管的实例
+has_legacy_instances() {
+	[ -d "$LEGACY_SUPERVISOR_DIR" ] && \
+		ls "$LEGACY_SUPERVISOR_DIR"/kcptun*.conf >/dev/null 2>&1
+}
+
+# 获取旧版 Supervisor 实例数量
+get_legacy_instance_count() {
+	if has_legacy_instances; then
+		ls "$LEGACY_SUPERVISOR_DIR"/kcptun*.conf | wc -l | tr -d ' '
+	else
+		echo "0"
+	fi
+}
+
+# 将旧版 Supervisor 托管的实例自动迁移到当前服务管理方式
+# 沿用实例已有的 server-config<id>.json，不需要用户重新输入配置
+migrate_legacy_instances() {
+	if ! has_legacy_instances; then
+		return 0
+	fi
+
+	detect_service_backend
+
+	local legacy_count=""
+	legacy_count="$(get_legacy_instance_count)"
+
+	cat >&1 <<-EOF
+	检测到 ${legacy_count} 个由旧版 Supervisor 托管的 Kcptun 实例，正在自动迁移到 ${SERVICE_BACKEND}。
+	迁移过程中服务会短暂中断，实例配置保持不变，无需重新配置。
+	EOF
+
+	local backup_instance_id="$current_instance_id"
+	local backup_run_user="$run_user"
+	local conf=""
+	local instance_id=""
+	local config_file=""
+	local log_file=""
+	local migrated="0"
+	local failed="0"
+
+	if [ ! -d "$KCPTUN_LOG_DIR" ]; then
+		(
+			set -x
+			mkdir -p "$KCPTUN_LOG_DIR"
+		)
+	fi
+	chmod a+w "$KCPTUN_LOG_DIR" 2>/dev/null || true
+
+	for conf in "$LEGACY_SUPERVISOR_DIR"/kcptun*.conf; do
+		[ -f "$conf" ] || continue
+
+		instance_id="$(basename "$conf" .conf | sed 's/^kcptun//')"
+		current_instance_id="$instance_id"
+		config_file="$(get_current_file 'config')"
+
+		if [ ! -s "$config_file" ]; then
+			cat >&1 <<-EOF
+			跳过实例 kcptun${instance_id}: 未找到配置文件 ${config_file}
+			EOF
+			failed=$(expr $failed + 1)
+			continue
+		fi
+
+		# 按配置推断运行用户，并确保日志可写
+		run_user="$(get_instance_run_user "$instance_id")"
+		log_file="$(get_current_file 'log')"
+		if [ -f "$log_file" ] && [ "$run_user" != "root" ]; then
+			chown "$run_user" "$log_file" 2>/dev/null || true
+		fi
+
+		# 生成当前服务管理方式对应的服务文件
+		gen_service_file
+
+		# 停止并移除旧版 Supervisor 配置
+		if command_exists supervisorctl; then
+			supervisorctl stop "kcptun${instance_id}" >/dev/null 2>&1 || true
+		fi
+		rm -f "$conf"
+
+		reload_service_manager
+		enable_instance_service "$instance_id"
+
+		if start_instance_service "$instance_id" >/dev/null 2>&1; then
+			migrated=$(expr $migrated + 1)
+			cat >&1 <<-EOF
+			实例 kcptun${instance_id} 已迁移: $(get_current_file 'service')
+			EOF
+		else
+			failed=$(expr $failed + 1)
+			cat >&2 <<-EOF
+			实例 kcptun${instance_id} 启动失败，请使用 '$0 log ${instance_id:-1}' 查看日志。
+			EOF
+		fi
+	done
+
+	if command_exists supervisorctl; then
+		supervisorctl update >/dev/null 2>&1 || true
+	fi
+
+	current_instance_id="$backup_instance_id"
+	run_user="$backup_run_user"
+
+	cat >&1 <<-EOF
+	迁移完成: 成功 ${migrated} 个，失败 ${failed} 个。
+	EOF
+
+	any_key_to_continue
+}
+
+# 检测并迁移旧版 Supervisor 托管的实例（交互式兜底）
 migrate_legacy_supervisor() {
 	if [ ! -d "$LEGACY_SUPERVISOR_DIR" ] || \
 		! ls "$LEGACY_SUPERVISOR_DIR"/kcptun*.conf >/dev/null 2>&1; then
@@ -3177,6 +3287,11 @@ manual_install() {
 pre_ckeck() {
 	check_root
 
+	# 旧版 Supervisor 实例先自动迁移，保证 show/log/reconfig 等命令可用
+	if is_installed && has_legacy_instances; then
+		migrate_legacy_instances
+	fi
+
 	if ! is_installed; then
 		cat >&2 <<-EOF
 		错误: 检测到你还没有安装 Kcptun，
@@ -3205,9 +3320,10 @@ is_installed() {
 		)
 	fi
 
-	if [ -d "$KCPTUN_INSTALL_DIR" ] && [ -n "$(get_installed_version)" ] && \
-		[ "$(get_instance_count)" -gt 0 ]; then
-		return 0
+	if [ -d "$KCPTUN_INSTALL_DIR" ] && [ -n "$(get_installed_version)" ]; then
+		if [ "$(get_instance_count)" -gt 0 ] || has_legacy_instances; then
+			return 0
+		fi
 	fi
 
 	return 1
@@ -3216,8 +3332,14 @@ is_installed() {
 # 检查是否已经安装
 installed_check() {
 	local instance_count=""
+
+	# 旧版 Supervisor 实例先自动迁移，避免用户被要求重新配置
+	if is_installed && has_legacy_instances; then
+		migrate_legacy_instances
+	fi
+
 	instance_count="$(get_instance_count)"
-	if is_installed && [ $instance_count -gt 0 ]; then
+	if is_installed && [ "$instance_count" -gt 0 ]; then
 		cat >&1 <<-EOF
 		检测到你已安装 Kcptun 服务端, 已配置的实例个数为 ${instance_count} 个
 		EOF
