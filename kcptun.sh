@@ -2527,54 +2527,170 @@ gen_kcptun_config() {
 	gen_service_file
 }
 
-# 设置防火墙开放端口
-set_firewall() {
-	if command_exists firewall-cmd; then
-		if ! ( firewall-cmd --state >/dev/null 2>&1 ); then
-			systemctl start firewalld >/dev/null 2>&1
-		fi
-		if [ "$?" = "0" ]; then
-			if [ -n "$current_listen_port" ]; then
-				firewall-cmd --zone=public --remove-port=${current_listen_port}/udp >/dev/null 2>&1
-			fi
+# 将 30000-35000 形式的端口转换为防火墙工具要求的范围写法
+to_range_port() {
+	echo "$1" | sed 's/-/:/'
+}
 
-			if ! firewall-cmd --quiet --zone=public --query-port=${listen_port}/udp; then
-				firewall-cmd --quiet --permanent --zone=public --add-port=${listen_port}/udp
-				firewall-cmd --reload
-			fi
+# 检测可用的防火墙管理工具，优先使用发行版默认工具
+detect_firewall_tool() {
+	if command_exists firewall-cmd; then
+		echo 'firewalld'
+	elif command_exists ufw; then
+		echo 'ufw'
+	elif command_exists iptables; then
+		echo 'iptables'
+	fi
+}
+
+# firewalld 放行端口，不启动或重启防火墙
+set_firewall_firewalld() {
+	local new_port="${listen_port}/udp"
+	local old_port=""
+	[ -n "$current_listen_port" ] && old_port="${current_listen_port}/udp"
+
+	if ! firewall-cmd --state >/dev/null 2>&1; then
+		# 防火墙未运行：端口本身已可用，只尝试写入永久配置，不启动服务
+		if firewall-cmd --permanent --zone=public --add-port="$new_port" >/dev/null 2>&1; then
+			cat >&1 <<-EOF
+			firewalld 当前未运行，已写入永久规则 ${new_port}，未启动防火墙。
+			EOF
 		else
 			cat >&1 <<-EOF
-			警告: 自动添加 firewalld 规则失败
-			如果有必要, 请手动添加端口 ${listen_port} 的防火墙规则:
-			    firewall-cmd --permanent --zone=public --add-port=${listen_port}/udp
+			firewalld 当前未运行，跳过端口放行（端口可直接使用），也不会启动防火墙。
+			如需预置规则，可在防火墙启动后执行:
+			    firewall-cmd --permanent --zone=public --add-port=${new_port}
 			    firewall-cmd --reload
 			EOF
 		fi
-	elif command_exists iptables; then
-		if ! ( service iptables status >/dev/null 2>&1 ); then
-			service iptables start >/dev/null 2>&1
-		fi
+		return 0
+	fi
 
-		if [ "$?" = "0" ]; then
-			if [ -n "$current_listen_port" ]; then
-				iptables -D INPUT -p udp --dport ${current_listen_port} -j ACCEPT >/dev/null 2>&1
-			fi
+	if [ -n "$old_port" ] && [ "$old_port" != "$new_port" ]; then
+		firewall-cmd --permanent --zone=public --remove-port="$old_port" >/dev/null 2>&1 || true
+		firewall-cmd --zone=public --remove-port="$old_port" >/dev/null 2>&1 || true
+	fi
 
-			if ! iptables -C INPUT -p udp --dport ${listen_port} -j ACCEPT >/dev/null 2>&1; then
-				iptables -I INPUT -p udp --dport ${listen_port} -j ACCEPT >/dev/null 2>&1
-				service iptables save
-				service iptables restart
-			fi
+	if firewall-cmd --permanent --zone=public --add-port="$new_port" >/dev/null 2>&1 && \
+		firewall-cmd --zone=public --add-port="$new_port" >/dev/null 2>&1; then
+		cat >&1 <<-EOF
+		已在 firewalld 放行 UDP 端口: ${new_port}
+		EOF
+	else
+		cat >&1 <<-EOF
+		警告: 自动添加 firewalld 规则失败
+		如有必要, 请手动添加端口 ${new_port} 的防火墙规则:
+		    firewall-cmd --permanent --zone=public --add-port=${new_port}
+		    firewall-cmd --reload
+		EOF
+	fi
+}
+
+# ufw 放行端口，不启用或重启防火墙
+set_firewall_ufw() {
+	local new_port=""
+	new_port="$(to_range_port "$listen_port")/udp"
+	local old_port=""
+	[ -n "$current_listen_port" ] && old_port="$(to_range_port "$current_listen_port")/udp"
+
+	local ufw_active="false"
+	if ufw status 2>/dev/null | grep -q 'Status: active'; then
+		ufw_active="true"
+	fi
+
+	if [ -n "$old_port" ] && [ "$old_port" != "$new_port" ]; then
+		ufw delete allow "$old_port" >/dev/null 2>&1 || true
+	fi
+
+	if ufw allow "$new_port" >/dev/null 2>&1; then
+		if [ "$ufw_active" = "true" ]; then
+			cat >&1 <<-EOF
+			已在 ufw 放行 UDP 端口: ${new_port}
+			EOF
 		else
 			cat >&1 <<-EOF
-			警告: 自动添加 iptables 规则失败
-			如有必要, 请手动添加端口 ${listen_port} 的防火墙规则:
-			    iptables -I INPUT -p udp --dport ${listen_port} -j ACCEPT
-			    service iptables save
-			    service iptables restart
+			ufw 当前未启用，已写入放行规则 ${new_port}，未启用或重启防火墙。
 			EOF
 		fi
+	else
+		cat >&1 <<-EOF
+		警告: 自动添加 ufw 规则失败
+		如有必要, 请手动执行: ufw allow ${new_port}
+		EOF
 	fi
+}
+
+# iptables 放行端口，仅在服务已运行时保存规则，不启动或重启防火墙
+set_firewall_iptables() {
+	local new_port=""
+	new_port="$(to_range_port "$listen_port")"
+	local old_port=""
+	[ -n "$current_listen_port" ] && old_port="$(to_range_port "$current_listen_port")"
+
+	if [ -n "$old_port" ] && [ "$old_port" != "$new_port" ]; then
+		iptables -D INPUT -p udp --dport "$old_port" -j ACCEPT >/dev/null 2>&1 || true
+	fi
+
+	if ! iptables -C INPUT -p udp --dport "$new_port" -j ACCEPT >/dev/null 2>&1; then
+		if ! iptables -I INPUT -p udp --dport "$new_port" -j ACCEPT >/dev/null 2>&1; then
+			cat >&1 <<-EOF
+			警告: 自动添加 iptables 规则失败
+			如有必要, 请手动添加端口 ${new_port} 的防火墙规则:
+			    iptables -I INPUT -p udp --dport ${new_port} -j ACCEPT
+			EOF
+			return 0
+		fi
+	fi
+
+	local iptables_running="false"
+	if service iptables status >/dev/null 2>&1; then
+		iptables_running="true"
+	elif command_exists systemctl && systemctl is-active iptables >/dev/null 2>&1; then
+		iptables_running="true"
+	fi
+
+	if [ "$iptables_running" = "true" ]; then
+		service iptables save >/dev/null 2>&1 || true
+		cat >&1 <<-EOF
+		已在 iptables 放行 UDP 端口: ${new_port}，并已保存规则。
+		EOF
+	elif command_exists netfilter-persistent; then
+		netfilter-persistent save >/dev/null 2>&1 || true
+		cat >&1 <<-EOF
+		已在 iptables 放行 UDP 端口: ${new_port}，并已通过 netfilter-persistent 保存。
+		EOF
+	else
+		cat >&1 <<-EOF
+		已在 iptables 放行 UDP 端口: ${new_port}（临时规则，重启后可能失效）
+		iptables 服务未运行，脚本不会启动或重启防火墙。
+		如需持久化，请安装 iptables-persistent 或手动执行 service iptables save。
+		EOF
+	fi
+}
+
+# 设置防火墙开放端口
+# 自动适配 firewalld / ufw / iptables，且不会启动或重启已关闭的防火墙
+set_firewall() {
+	local tool=""
+	tool="$(detect_firewall_tool)"
+
+	case "$tool" in
+		firewalld)
+			set_firewall_firewalld
+			;;
+		ufw)
+			set_firewall_ufw
+			;;
+		iptables)
+			set_firewall_iptables
+			;;
+		*)
+			cat >&1 <<-EOF
+			未检测到 firewall-cmd / ufw / iptables，跳过防火墙配置。
+			如需放行，请手动开放 UDP 端口: ${listen_port}
+			EOF
+			;;
+	esac
 }
 
 # 选择一个实例
