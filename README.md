@@ -40,17 +40,34 @@
 
 ## 快速开始
 
-### 环境要求
+### 支持的系统
 
-- 系统：Ubuntu / Debian / Raspbian / CentOS / Fedora / RedHat / OracleLinux / Photon
+| 系统 | 版本 | 服务管理 | 防火墙适配 |
+| --- | --- | --- | --- |
+| Ubuntu | 20.04 / 22.04 / 24.04 | systemd | ufw |
+| Debian | 10 / 11 / 12 / 13 | systemd | iptables（nft 后端） |
+| CentOS | 7 / Stream 8 / Stream 9 | systemd | firewalld |
+| RHEL / Rocky Linux / AlmaLinux | 8 / 9 | systemd | firewalld |
+| Fedora | 30 及以上 | systemd | firewalld |
+| Oracle Linux | 7 / 8 / 9 | systemd | firewalld |
+| Photon OS | 3 及以上 | systemd | iptables |
+
 - 架构：x86_64（amd64）、x86（386）、arm64、arm
-- 权限：root
-- 服务管理：systemd（优先）或 SysVinit
+- 权限：需要 root
+- 服务管理：systemd 优先，无 systemd 时回退 SysVinit
+- 运行依赖：wget（或 curl）、gawk、jq，脚本会自动安装，**无需 Python / pip / Supervisor**
+
+> 未列出的衍生发行版，只要使用 systemd + apt/dnf/yum 包管理，通常也可以直接运行。
 
 ### 安装
 
 ```sh
+# 使用 wget
 wget --no-check-certificate -O kcptun.sh https://github.com/TuuzNet/kcptun-script/raw/main/kcptun.sh
+
+# 或使用 curl（最小化系统可能只有 curl）
+curl -fsSL https://github.com/TuuzNet/kcptun-script/raw/main/kcptun.sh -o kcptun.sh
+
 sh kcptun.sh
 ```
 
@@ -139,7 +156,7 @@ FEC 取值参考：丢包 1%~5% 用 `parityshard 2~3`，5%~10% 用 `4~6`，超�
 
 | 版本 | 含义 | 当前值 |
 | --- | --- | --- |
-| `shell_version` | 安装脚本版本 | `31` |
+| `shell_version` | 安装脚本版本 | `32` |
 | `config_version` | 服务端配置格式版本 | `7` |
 | `init_version` | 服务文件版本 | `4` |
 
