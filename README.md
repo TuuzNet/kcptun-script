@@ -11,7 +11,7 @@ Kcptun 服务端一键安装/管理脚本（2026 版）。基于 KCP 协议，�
 - **多实例管理**：支持添加、删除、重新配置多个 Kcptun 实例，实现多端口同时加速
 - **systemd 原生托管**：自动生成 systemd unit（SysVinit 环境下生成 init 脚本），支持开机自启与崩溃自动拉起，不再依赖 Python 与 Supervisor
 - **旧版平滑迁移**：检测到 Supervisor 部署可执行 `migrate` 切换到 systemd/SysVinit，沿用现有配置、无需重新配置，迁移后可一并卸载 Supervisor
-- **自动防火墙配置**：自动检测 firewalld / iptables 并放行 UDP 监听端口
+- **自动防火墙配置**：自动适配 firewalld / ufw / iptables 并放行 UDP 监听端口；防火墙处于关闭状态时只写入规则（或临时规则），不会启动或重启防火墙
 - **一键更新**：脚本自身、配置模板、服务文件、Kcptun 主程序均可在线检查更新，并展示更新日志；`check` 命令可仅查询是否有新版本而不执行更新
 - **自定义版本安装**：可指定任意 TAG 安装历史版本（不支持 v20160826 及更早版本）
 - **客户端配置生成**：安装完成后自动输出服务端配置、对应的客户端 JSON 配置以及手机端参数字符串
@@ -105,7 +105,7 @@ Kcptun 服务管理命令 (SysVinit):
 
 | 版本 | 含义 | 当前值 |
 | --- | --- | --- |
-| `shell_version` | 安装脚本版本 | `30` |
+| `shell_version` | 安装脚本版本 | `31` |
 | `config_version` | 服务端配置文件格式版本 | `7` |
 | `init_version` | 服务文件（systemd unit / init 脚本）版本 | `4` |
 
@@ -116,7 +116,7 @@ Kcptun 服务管理命令 (SysVinit):
 
 1. 修改 `kcptun.sh` 中的 `SHELL_VERSION`（必要时同时修改 `CONFIG_VERSION` / `INIT_VERSION`）
 2. 同步更新 `version.json` 的版本号、`change_log`、`shell_url`、`shell_sha256` 与 `release_url`
-3. 提交后创建并推送 tag：`git tag -a v30 -m "kcptun-script v30" && git push origin main --tags`
+3. 提交后创建并推送 tag：`git tag -a v31 -m "kcptun-script v31" && git push origin main --tags`
 4. 在 GitHub Releases 页面基于该 tag 创建 Release，粘贴 `change_log` 作为更新说明
 
 ### 旧版 Supervisor 迁移
@@ -212,5 +212,5 @@ sh kcptun.sh migrate
 - **旧版 Supervisor 迁移**：从 v26 及更早版本升级时，脚本会提示停止并移除 `/etc/supervisor/conf.d/kcptun*.conf`，避免同一端口重复启动
 - **jq 安装失败**：优先尝试发行版软件包；仍失败时会下载 jq 1.7.1 静态二进制到 `/usr/local/kcptun/bin/jq`
 - **下载失败**：可设置 `GITHUB_PROXY` 或 `KCPTUN_RELEASES_API` 使用镜像；脚本同样会自动重试 3 次
-- **防火墙**：脚本会自动添加 firewalld / iptables 的 UDP 端口放行规则，失败时会输出手动添加命令
+- **防火墙**：自动识别 firewalld / ufw / iptables 并放行 UDP 端口；已关闭的防火墙不会被脚本启动或重启（ufw 写入配置、iptables 添加临时规则、firewalld 需运行后才能写规则），失败时输出手动命令
 - **版本回退**：使用 `sh kcptun.sh manual` 输入完整 TAG（如 `v20160904`）即可安装指定历史版本
