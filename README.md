@@ -156,12 +156,13 @@ FEC 取值参考：丢包 1%~5% 用 `parityshard 2~3`，5%~10% 用 `4~6`，超�
 
 | 版本 | 含义 | 当前值 |
 | --- | --- | --- |
-| `shell_version` | 安装脚本版本 | `32` |
+| `shell_version` | 安装脚本版本 | `33` |
 | `config_version` | 服务端配置格式版本 | `7` |
 | `init_version` | 服务文件版本 | `4` |
 
 - `check`：读取 `version.json` 对比版本，只输出结果，不修改文件
 - `update`：脚本更新先下载到临时文件并通过 `shell_sha256` 校验，失败不会破坏当前脚本
+- 启动提示：已安装时运行脚本会先对比本地与最新 Kcptun 版本，发现更新会提示按 `4` 检查并更新，网络不可用时静默跳过
 - 推送 `v*` tag 后，仓库内的 GitHub Actions 会自动创建对应 Release 并附带 `kcptun.sh`
 
 发布新版本：修改版本号 → 更新 `version.json` → 提交 → `git tag -a vXX && git push origin main --tags`。

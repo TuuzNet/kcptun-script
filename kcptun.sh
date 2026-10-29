@@ -8,7 +8,7 @@ export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
 # 版本信息，请勿修改
 # =================
-SHELL_VERSION=32
+SHELL_VERSION=33
 CONFIG_VERSION=7
 INIT_VERSION=4
 # =================
@@ -407,6 +407,20 @@ https_download() {
 		wget -O "$file" --no-check-certificate "$url"
 	elif command_exists curl; then
 		curl -fsSL --insecure -o "$file" "$url"
+	else
+		return 1
+	fi
+}
+
+# 快速获取 URL 内容，用于启动时的版本提示，超时或失败不阻塞
+https_get_quick() {
+	local url=""
+	url="$(url_with_proxy "$1")"
+
+	if command_exists wget; then
+		wget -qO- --no-check-certificate --tries=1 --timeout=5 "$url"
+	elif command_exists curl; then
+		curl -fsSL --insecure --max-time 5 "$url"
 	else
 		return 1
 	fi
@@ -2803,6 +2817,35 @@ get_installed_version() {
 	fi
 }
 
+# 启动时提示 Kcptun 新版本，网络不可用时静默跳过
+check_kcptun_update_notice() {
+	local content=""
+	content="$(https_get_quick "$KCPTUN_LATEST_RELEASE_URL" 2>/dev/null | sed -r 's/(\\r)?\\n/#br#/g')"
+	if [ -z "$content" ]; then
+		return 0
+	fi
+
+	local remote_tag=""
+	remote_tag="$(echo "$content" | grep -oE '"tag_name"[[:space:]]*:[[:space:]]*"[^"]+"' | head -n 1 | sed 's/.*"\([^"]*\)"$/\1/')"
+	if [ -z "$remote_tag" ]; then
+		return 0
+	fi
+
+	local local_tag=""
+	local_tag="$(get_installed_version)"
+	if [ -z "$local_tag" ] || [ "$local_tag" = "$remote_tag" ]; then
+		return 0
+	fi
+
+	cat >&1 <<-EOF
+
+	========================================================
+	发现 Kcptun 新版本: ${local_tag} -> ${remote_tag}
+	按 4 回车即可检查并更新，也可直接运行: sh $0 update
+	========================================================
+	EOF
+}
+
 # 加载当前选择实例的配置文件
 load_instance_config() {
 	local config_file=""
@@ -3663,6 +3706,9 @@ installed_check() {
 		cat >&1 <<-EOF
 		检测到你已安装 Kcptun 服务端, 已配置的实例个数为 ${instance_count} 个
 		EOF
+
+		check_kcptun_update_notice
+
 		while true
 		do
 			cat >&1 <<-'EOF'
@@ -3670,7 +3716,7 @@ installed_check() {
 			(1) 覆盖安装
 			(2) 重新配置
 			(3) 添加实例(多端口)
-			(4) 检查更新
+			(4) 检查并更新
 			(5) 查看配置
 			(6) 查看日志输出
 			(7) 自定义版本安装
