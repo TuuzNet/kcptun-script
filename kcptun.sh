@@ -101,6 +101,8 @@ clear
 cat >&1 <<-'EOF'
 #########################################################
 # Kcptun 服务端一键安装脚本                             #
+# 项目地址: https://github.com/TuuzNet/kcptun-script    #
+# 交流群: 94537310                                      #
 #########################################################
 EOF
 
@@ -1575,13 +1577,15 @@ set_kcptun_config() {
 	while true
 	do
 		cat >&1 <<-'EOF'
-		请设置前向纠错 datashard
+		请设置前向纠错 datashard (每组数据分片数, 通常 1~64)
+		值越大单组数据越多, 吞吐更高, 但重组延迟与内存占用也更高
+		推荐: 常规网络保持 10; 延迟敏感场景可适当降到 6~8
 		该参数必须两端一致
 		EOF
 		read -p "(默认: ${datashard}): " input
 		if [ -n "$input" ]; then
-			if ! is_number "$input" || [ $input -lt 0 ]; then
-				echo "输入有误, 请输入大于等于0的数字!"
+			if ! is_number "$input" || [ $input -lt 1 ]; then
+				echo "输入有误, 请输入大于等于1的数字!"
 				continue
 			fi
 
@@ -1601,7 +1605,10 @@ set_kcptun_config() {
 	while true
 	do
 		cat >&1 <<-'EOF'
-		请设置前向纠错 parityshard
+		请设置前向纠错 parityshard (每组冗余分片数)
+		0 表示关闭 FEC; 值越大抗丢包越强, 但流量开销越高
+		流量开销约为 (datashard + parityshard) / datashard 倍
+		参考: 丢包<1% 用 0~1; 1%~5% 用 2~3; 5%~10% 用 4~6; >10% 用 8~10
 		该参数必须两端一致
 		EOF
 		read -p "(默认: ${parityshard}): " input
