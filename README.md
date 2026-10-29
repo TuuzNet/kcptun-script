@@ -10,6 +10,7 @@ Kcptun 服务端一键安装/管理脚本（2026 版）。基于 KCP 协议，�
 - **交互式配置**：引导式设置运行端口、加速地址、加密方式、加速模式等全部参数，均有默认值，一路回车即可完成部署
 - **多实例管理**：支持添加、删除、重新配置多个 Kcptun 实例，实现多端口同时加速
 - **systemd 原生托管**：自动生成 systemd unit（SysVinit 环境下生成 init 脚本），支持开机自启与崩溃自动拉起，不再依赖 Python 与 Supervisor
+- **旧版平滑迁移**：检测到 Supervisor 部署可执行 `migrate` 切换到 systemd/SysVinit，沿用现有配置、无需重新配置，迁移后可一并卸载 Supervisor
 - **自动防火墙配置**：自动检测 firewalld / iptables 并放行 UDP 监听端口
 - **一键更新**：脚本自身、配置模板、服务文件、Kcptun 主程序均可在线检查更新，并展示更新日志；`check` 命令可仅查询是否有新版本而不执行更新
 - **自定义版本安装**：可指定任意 TAG 安装历史版本（不支持 v20160826 及更早版本）
@@ -77,6 +78,7 @@ sh kcptun.sh
     uninstall        卸载
     check            仅检查脚本与 Kcptun 是否有新版本
     update           检查并执行更新
+    migrate          迁移旧版 Supervisor 部署到 systemd/SysVinit
     manual           自定义 Kcptun 版本安装
     help             查看脚本使用说明
     add              添加一个实例, 多端口加速
@@ -103,7 +105,7 @@ Kcptun 服务管理命令 (SysVinit):
 
 | 版本 | 含义 | 当前值 |
 | --- | --- | --- |
-| `shell_version` | 安装脚本版本 | `29` |
+| `shell_version` | 安装脚本版本 | `30` |
 | `config_version` | 服务端配置文件格式版本 | `7` |
 | `init_version` | 服务文件（systemd unit / init 脚本）版本 | `4` |
 
@@ -114,8 +116,22 @@ Kcptun 服务管理命令 (SysVinit):
 
 1. 修改 `kcptun.sh` 中的 `SHELL_VERSION`（必要时同时修改 `CONFIG_VERSION` / `INIT_VERSION`）
 2. 同步更新 `version.json` 的版本号、`change_log`、`shell_url`、`shell_sha256` 与 `release_url`
-3. 提交后创建并推送 tag：`git tag -a v29 -m "kcptun-script v29" && git push origin main --tags`
+3. 提交后创建并推送 tag：`git tag -a v30 -m "kcptun-script v30" && git push origin main --tags`
 4. 在 GitHub Releases 页面基于该 tag 创建 Release，粘贴 `change_log` 作为更新说明
+
+### 旧版 Supervisor 迁移
+
+从 Supervisor 版本升级到 systemd/SysVinit 版本时，可直接执行：
+
+```sh
+sh kcptun.sh migrate
+```
+
+- 仅当存在 `/etc/supervisor/conf.d/kcptun*.conf` 时才执行；已经是新部署时会直接提示无需迁移，不会做任何修改
+- 沿用 `/usr/local/kcptun/server-config<id>.json`，不重新下载、不重新输入参数，迁移期间服务短暂中断
+- 旧配置会备份到 `/usr/local/kcptun/.legacy-supervisor/`，新服务启动成功后才删除原文件
+- 迁移成功后写入 `/usr/local/kcptun/.supervisor-migrated`（标记 `MIGRATE_VERSION=100`）
+- Supervisor 若还在托管其他程序会自动跳过卸载；否则会询问是否卸载 supervisord
 
 ### 交互式配置项
 
