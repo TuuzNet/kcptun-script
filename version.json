@@ -1,8 +1,8 @@
 {
 	"shell_version": 32,
-	"shell_url": "https://github.com/TuuzNet/kcptun-script/raw/main/kcptun.sh",
-	"shell_sha256": "",
-	"release_url": "https://github.com/TuuzNet/kcptun-script/releases",
+	"shell_url": "https://github.com/TuuzNet/kcptun-script/raw/v32/kcptun.sh",
+	"shell_sha256": "8b6fe0cbdb39e28444715733b93bcf4c31b15e7402f89f123f06887ee3326d02",
+	"release_url": "https://github.com/TuuzNet/kcptun-script/releases/tag/v32",
 	"change_log": "1. 服务管理改为 systemd / SysVinit，不再依赖 python、pip 与 Supervisor;\n2. Kcptun 改用 Release 裸二进制并通过 checksums.txt 校验，新增 arm64 / arm 支持;\n3. 新增 check 命令，可仅检查脚本与 Kcptun 是否有新版本;\n4. 自更新支持 shell_sha256 校验，并展示 GitHub Release 页面;\n5. 交互提示补充 datashard / parityshard 取值建议，手动编辑配置默认使用 nano;\n6. 修复旧版 Supervisor 实例升级后被误判为未安装、要求重新配置的问题，现在会自动迁移并保留原有配置;\n7. 新增 migrate 命令，可将旧版 Supervisor 部署平滑迁移到 systemd / SysVinit，沿用现有配置并卸载旧 Supervisor;\n8. 防火墙配置自动适配 firewalld / ufw / iptables，且不再启动或重启已关闭的防火墙;\n9. 完善 Debian / Ubuntu / CentOS 与红帽衍生发行版（RHEL / Rocky / Alma / Oracle Linux）的系统识别与包管理器适配，CentOS 7 的 jq 安装支持自动启用 EPEL",
 	"config_version": 7,
 	"config_change_log": "1. 配置文件格式无变化",
