@@ -116,7 +116,8 @@ usage() {
 
 	    install          安装
 	    uninstall        卸载
-	    update           检查更新
+	    check            仅检查脚本与 Kcptun 是否有新版本
+	    update           检查并执行更新
 	    manual           自定义 Kcptun 版本安装
 	    help             查看脚本使用说明
 	    add              添加一个实例, 多端口加速
@@ -816,6 +817,8 @@ get_shell_version_info() {
 	config_change_log="$(get_json_string "$shell_version_content" '.config_change_log')"
 	init_change_log="$(get_json_string "$shell_version_content" '.init_change_log')"
 	new_shell_url="$(get_json_string "$shell_version_content" '.shell_url')"
+	shell_release_url="$(get_json_string "$shell_version_content" '.release_url')"
+	new_shell_sha256="$(get_json_string "$shell_version_content" '.shell_sha256')"
 
 
 	if [ -z "$new_shell_version" ]; then
@@ -2687,6 +2690,88 @@ do_uninstall() {
 	EOF
 }
 
+# 仅检查脚本与 Kcptun 是否有新版本，不执行更新
+do_check() {
+	check_root
+
+	cat >&1 <<-EOF
+	正在检查脚本与 Kcptun 更新...
+	EOF
+
+	local found_update="false"
+
+	if get_shell_version_info; then
+		if [ "$new_shell_version" -gt "$SHELL_VERSION" ]; then
+			found_update="true"
+			cat >&1 <<-EOF
+			发现脚本更新: v${SHELL_VERSION} -> v${new_shell_version}
+			更新说明:
+			$(printf '%s\n' "$shell_change_log")
+			EOF
+
+			if [ -n "$shell_release_url" ]; then
+				cat >&1 <<-EOF
+				发布页面: ${shell_release_url}
+				EOF
+			fi
+		fi
+
+		if [ "$new_config_version" -gt "$CONFIG_VERSION" ]; then
+			found_update="true"
+			cat >&1 <<-EOF
+			发现配置模板更新: v${CONFIG_VERSION} -> v${new_config_version}
+			EOF
+		fi
+
+		if [ "$new_init_version" -gt "$INIT_VERSION" ]; then
+			found_update="true"
+			cat >&1 <<-EOF
+			发现服务文件更新: v${INIT_VERSION} -> v${new_init_version}
+			EOF
+		fi
+	else
+		cat >&2 <<-EOF
+		检查脚本更新失败，请检查网络或 version.json 地址。
+		EOF
+	fi
+
+	if is_installed; then
+		echo "正在检查 Kcptun 版本..."
+		if get_kcptun_version_info; then
+			local cur_tag_name=""
+			cur_tag_name="$(get_installed_version)"
+			if [ -n "$kcptun_release_tag_name" ] && \
+				[ "$kcptun_release_tag_name" != "$cur_tag_name" ]; then
+				found_update="true"
+				cat >&1 <<-EOF
+				发现 Kcptun 新版本 ${kcptun_release_tag_name} (当前: ${cur_tag_name})
+				EOF
+
+				if [ "$kcptun_release_prerelease" = "true" ]; then
+					cat >&1 <<-EOF
+					注意: 该版本为预览版, 请谨慎更新。
+					EOF
+				fi
+			fi
+		fi
+	else
+		cat >&1 <<-EOF
+		Kcptun 未安装, 跳过主程序版本检查。
+		EOF
+	fi
+
+	if [ "$found_update" = "false" ]; then
+		cat >&1 <<-EOF
+		当前脚本与 Kcptun 均为最新版本。
+		EOF
+	fi
+
+	cat >&1 <<-EOF
+
+	提示: 使用 $0 update 可执行全部更新。
+	EOF
+}
+
 # 更新
 do_update() {
 	pre_ckeck
@@ -2698,18 +2783,28 @@ do_update() {
 	if get_shell_version_info; then
 		local shell_path=$0
 
-		if [ $new_shell_version -gt $SHELL_VERSION ]; then
+		if [ "$new_shell_version" -gt "$SHELL_VERSION" ]; then
 			cat >&1 <<-EOF
-			发现一键安装脚本更新, 版本号: ${new_shell_version}
+			发现一键安装脚本更新: v${SHELL_VERSION} -> v${new_shell_version}
 			更新说明:
 			$(printf '%s\n' "$shell_change_log")
 			EOF
+
+			if [ -n "$shell_release_url" ]; then
+				cat >&1 <<-EOF
+				发布页面: ${shell_release_url}
+				EOF
+			fi
+
 			any_key_to_continue
 
-			mv -f "$shell_path" "$shell_path".bak
+			# 先下载到临时文件，校验通过后再替换，避免更新失败导致脚本丢失
+			local new_shell_path="${shell_path}.new"
+			download_file "$new_shell_url" "$new_shell_path" "$new_shell_sha256"
+			chmod a+x "$new_shell_path"
 
-			download_file "$new_shell_url" "$shell_path"
-			chmod a+x "$shell_path"
+			mv -f "$shell_path" "$shell_path".bak
+			mv -f "$new_shell_path" "$shell_path"
 
 			sed -i -r "s/^CONFIG_VERSION=[0-9]+/CONFIG_VERSION=${CONFIG_VERSION}/" "$shell_path"
 			sed -i -r "s/^INIT_VERSION=[0-9]+/INIT_VERSION=${INIT_VERSION}/" "$shell_path"
@@ -3193,7 +3288,7 @@ installed_check() {
 
 action=${1:-"install"}
 case "$action" in
-	install|uninstall|update)
+	install|uninstall|update|check)
 		do_${action}
 		;;
 	add|reconfig|show|log|del)
