@@ -4,9 +4,14 @@
 
 本脚本用于在一台 Linux 服务器上快速部署 [Kcptun](https://github.com/tobycroft/kcptun) 服务端：自动下载主程序、生成配置、托管为系统服务，并提供多实例管理与在线更新能力。
 
+> 下文的新旧版对比、常用命令、配置参数、丢包测试、迁移与常见问题等细节章节默认收起，点击标题即可展开。
+
 ---
 
-## 新版与旧版的核心区别
+<details>
+<summary><strong>新版与旧版的核心区别</strong></summary>
+
+### 新版与旧版的核心区别
 
 本次重构（v27 起）与旧的 Supervisor 版本相比，变化集中在**依赖、托管方式与升级体验**三块：
 
@@ -24,6 +29,8 @@
 
 一句话总结：**依赖更少、架构更全、升级不再要求重新配置。**
 
+</details>
+
 ---
 
 ## 主要特性
@@ -39,6 +46,9 @@
 ---
 
 ## 快速开始
+
+<details>
+<summary><strong>支持的系统</strong></summary>
 
 ### 支持的系统
 
@@ -58,6 +68,8 @@
 - 运行依赖：wget（或 curl）、gawk、jq，脚本会自动安装，**无需 Python / pip / Supervisor**
 
 > 未列出的衍生发行版，只要使用 systemd + apt/dnf/yum 包管理，通常也可以直接运行。
+
+</details>
 
 ### 安装
 
@@ -81,7 +93,10 @@ GITHUB_PROXY='https://ghfast.top/' sh kcptun.sh
 
 ---
 
-## 常用命令
+<details>
+<summary><strong>常用命令</strong>（实例管理 · 服务操作）</summary>
+
+### 常用命令
 
 | 命令 | 作用 |
 | --- | --- |
@@ -112,9 +127,14 @@ systemctl {enable|disable} kcptun<id>
 service kcptun<id> {start|stop|restart|status}
 ```
 
+</details>
+
 ---
 
-## 配置参数
+<details>
+<summary><strong>配置参数</strong>（交互式配置全量参数表）</summary>
+
+### 配置参数
 
 交互式配置会依次引导以下参数，均有默认值：
 
@@ -137,9 +157,14 @@ FEC 取值参考：丢包 1%~5% 用 `parityshard 2~3`，5%~10% 用 `4~6`，超�
 
 隐藏参数（acknodelay、sockbuf、smuxbuf、keepalive、smuxver、streambuf）通常保持默认即可。
 
+</details>
+
 ---
 
-## 丢包测试
+<details>
+<summary><strong>丢包测试</strong>（前提 · 使用 · 档位 · 结果解读）</summary>
+
+### 丢包测试
 
 脚本内置了基于 KCP OOB（不重传）的丢包测试，**上行和下行分开测试，先测下行再测上行**：下行由服务端发送探测包、客户端统计收包；上行由客户端发送探测包、服务端统计收包并回报，回射包用于计算 **RTT 分位与抖动**。它直接测量 KCP 会话所走的 UDP 链路，而不是 ICMP，因此能回答“ping/mtr 正常但代理卡顿”这类问题。
 
@@ -226,9 +251,14 @@ jitter        : 3.20ms
 - 若丢包率接近 100%，优先检查服务端是否已升级、FEC 是否开启；
 - 手机端客户端暂不支持该测试。
 
+</details>
+
 ---
 
-## 文件布局
+<details>
+<summary><strong>文件布局</strong></summary>
+
+### 文件布局
 
 | 路径 | 说明 |
 | --- | --- |
@@ -238,9 +268,14 @@ jitter        : 3.20ms
 | `/var/log/kcptun/snmplog<id>.log` | SNMP 日志（可选） |
 | `/etc/systemd/system/kcptun<id>.service` | systemd unit（SysVinit 下为 `/etc/init.d/kcptun<id>`） |
 
+</details>
+
 ---
 
-## 版本与更新
+<details>
+<summary><strong>版本与更新</strong></summary>
+
+### 版本与更新
 
 脚本维护三个独立版本号，定义在 `kcptun.sh` 头部与 `version.json`：
 
@@ -259,9 +294,14 @@ jitter        : 3.20ms
 
 发布新版本：修改版本号 → 更新 `version.json` → 提交 → `git tag -a vXX && git push origin main --tags`。
 
+</details>
+
 ---
 
-## 从旧版 Supervisor 迁移
+<details>
+<summary><strong>从旧版 Supervisor 迁移</strong></summary>
+
+### 从旧版 Supervisor 迁移
 
 ```sh
 sh kcptun.sh migrate
@@ -275,9 +315,14 @@ sh kcptun.sh migrate
 
 > 直接运行 `sh kcptun.sh` 时也会自动检测并迁移，不会要求重新配置。
 
+</details>
+
 ---
 
-## 常见问题
+<details>
+<summary><strong>常见问题</strong></summary>
+
+### 常见问题
 
 - **端口被占用**：配置监听端口时会检测占用并提示重新输入
 - **低端口**：监听端口 ≤ 1024 或开启 TCP 模式时，服务自动以 root 运行
@@ -285,6 +330,8 @@ sh kcptun.sh migrate
 - **下载失败**：设置 `GITHUB_PROXY` 或 `KCPTUN_RELEASES_API` 使用镜像
 - **Kcptun: 获取失败**：通常是服务器无法访问 `api.github.com` 或匿名 API 限流。执行 `curl -i https://api.github.com/repos/tobycroft/kcptun/releases/latest` 查看状态码；403 可稍后重试或设置只读 `GITHUB_TOKEN`；连接超时请检查网络，或设置 `KCPTUN_RELEASES_API` 镜像。注意 `GITHUB_PROXY` 只代理 `github.com`，不代理 `api.github.com`
 - **版本回退**：`sh kcptun.sh manual` 输入完整 TAG 即可安装历史版本
+
+</details>
 
 ---
 
