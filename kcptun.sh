@@ -3877,11 +3877,13 @@ losstest_run() {
 	local remote_cmd=""
 	remote_cmd="$(losstest_build_command "$duration" "$rate" "$server_ip" './kcptun-client')"
 
+	local total_duration=$((duration * 2))
 	cat >&1 <<-EOF
 
-	丢包测试参数: 时长 ${duration} 秒, 强度 ${rate}
-	测试原理: 客户端发送 KCP OOB 探测包(不重传), 服务端原样回射,
-	          根据往返序号缺口统计丢包率并计算 RTT / 抖动。
+	丢包测试参数: 单方向时长 ${duration} 秒, 强度 ${rate}, 总耗时约 ${total_duration} 秒
+	测试原理: 上下行分开测试, 先测下行再测上行。
+	          下行: 服务端发送 KCP OOB 探测包(不重传), 客户端统计收包;
+	          上行: 客户端发送探测包, 服务端统计收包并回报, 回射包用于计算 RTT / 抖动。
 
 	请将以下命令复制到客户端机器执行(需要同版本 kcptun-client):
 	${remote_cmd}

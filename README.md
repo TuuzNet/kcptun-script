@@ -141,7 +141,7 @@ FEC 取值参考：丢包 1%~5% 用 `parityshard 2~3`，5%~10% 用 `4~6`，超�
 
 ## 丢包测试
 
-脚本内置了基于 KCP OOB（不重传）的丢包测试：客户端按选定速率发送探测包，服务端原样回射，客户端统计**往返丢包率、RTT 分位与抖动**。它直接测量 KCP 会话所走的 UDP 链路，而不是 ICMP，因此能回答“ping/mtr 正常但代理卡顿”这类问题。
+脚本内置了基于 KCP OOB（不重传）的丢包测试，**上行和下行分开测试，先测下行再测上行**：下行由服务端发送探测包、客户端统计收包；上行由客户端发送探测包、服务端统计收包并回报，回射包用于计算 **RTT 分位与抖动**。它直接测量 KCP 会话所走的 UDP 链路，而不是 ICMP，因此能回答“ping/mtr 正常但代理卡顿”这类问题。
 
 ### 前提
 
@@ -176,16 +176,21 @@ sh kcptun.sh losstest [id]
 客户端执行后输出：
 
 ```
-sent          : 14973 packets
-received      : 14852 packets
+phase 1       : downlink (server -> client)
+sent          : 14973 packets (by server)
+received      : 14852 packets (at client)
 lost          : 121 packets (0.808%)
-rtt           : min 18.20ms / avg 25.40ms / p50 24.00ms / p95 41.00ms / p99 60.00ms / max 120.30ms
+phase 2       : uplink (client -> server)
+sent          : 14991 packets (by client)
+received      : 14870 packets (at server)
+lost          : 121 packets (0.807%)
+rtt (echo)    : min 18.20ms / avg 25.40ms / p50 24.00ms / p95 41.00ms / p99 60.00ms / max 120.30ms
 jitter        : 3.20ms
 ```
 
 ### 测试步骤
 
-1. 服务端升级到支持 `losstest` 的新版本，保持实例运行（新版本会自动回射探测包，无需改配置）；
+1. 服务端升级到支持 `losstest` 的新版本，保持实例运行（新版本会自动服务探测包，无需改配置）；
 2. 确认实例 `datashard` / `parityshard` 均大于 0；
 3. 在服务端执行 `sh kcptun.sh losstest`，选时长与强度，复制生成的命令；
 4. 在**客户端所在机器**执行该命令（需要同版本 `kcptun-client`）；
@@ -217,7 +222,7 @@ jitter        : 3.20ms
 ### 注意
 
 - 全速档会持续占用约 20 Mbps 带宽，请避免在生产高峰执行；
-- 丢包率是**往返合计**（客户端→服务端→客户端），不能单独区分上行/下行；
+- 总测试时长约为单方向时长的两倍（下行、上行各测一遍）；
 - 若丢包率接近 100%，优先检查服务端是否已升级、FEC 是否开启；
 - 手机端客户端暂不支持该测试。
 
