@@ -4,6 +4,12 @@ on:
   push:
     branches:
       - main
+    # 也要监听 tag 推送：作业体是按 `git describe --tags` 取最新 tag 来发布的，
+    # 只订阅分支时，“先推分支、后打 tag”这种顺序会让那次 run 只看到上一个 tag，
+    # 发现 Release 已存在直接 skip，新版本的 Release 就静默缺失（实测踩过）。
+    # 加上 tags 触发后，推送 tag 自己就能把对应 Release 补上，与推送顺序无关。
+    tags:
+      - 'v*'
   workflow_dispatch:
 
 permissions:
