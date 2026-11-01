@@ -8,7 +8,7 @@ export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
 # 版本信息，请勿修改
 # =================
-SHELL_VERSION=42
+SHELL_VERSION=43
 CONFIG_VERSION=9
 INIT_VERSION=4
 # =================
@@ -140,6 +140,7 @@ usage() {
 	    show <id>        显示实例详细配置
 	    log <id>         显示实例日志
 	    del <id>         删除一个实例
+	    clientconf <id>  生成客户端配置(可设置 conn / autoexpire 等客户端本地参数)
 	    losstest <id>    丢包测试(需客户端同版本配合)
 
 	注: 上述参数中的 <id> 可选, 代表的是实例的ID
@@ -2270,24 +2271,6 @@ set_kcptun_config() {
 		unset_hidden_parameters
 	fi
 
-	cat >&1 <<-'EOF'
-	是否设置客户端参数（连接数与端口轮换策略）?
-	不设置则使用默认值：1 条连接，固定端口
-	EOF
-	read -p "(默认: 否) [y/n]: " yn
-	if [ -n "$yn" ]; then
-		case "$(first_character "$yn")" in
-			y|Y)
-				set_client_parameters
-				;;
-			n|N|*)
-				unset_client_parameters
-				;;
-		esac
-	else
-		unset_client_parameters
-	fi
-
 	# 监听低端口或使用 TCP 时需要 root 权限
 	if echo "$listen_port" | grep -qE '^[0-9]+-[0-9]+$'; then
 		range_start=$(echo "$listen_port" | cut -d'-' -f1)
@@ -2625,22 +2608,8 @@ set_hidden_parameters() {
 	EOF
 }
 
-# 不设置客户端参数，清空这些变量，让实例配置与生成的客户端配置回到默认值
-unset_client_parameters() {
-	conn=""
-	autoexpire=""
-	autoexpiremax=""
-	scavengettl=""
-	keepalivetolerance=""
-	cat >&1 <<-EOF
-	---------------------------
-	不配置客户端参数
-	---------------------------
-	EOF
-}
-
-# 设置客户端参数（只用于生成展示用的桌面客户端 JSON 配置，
-# 由 save_client_configs 存在旁路文件里，不写进服务端配置）
+# 设置客户端参数（只用于生成客户端配置，由 save_client_configs 存在旁路文件里，
+# 不写进服务端配置；只在 instance_clientconf 里调用）
 set_client_parameters() {
 	echo "开始设置客户端参数..."
 	local input=""
@@ -2800,20 +2769,46 @@ set_client_parameters() {
 	EOF
 }
 
-# 把客户端参数存进旁路文件，并从服务端配置里移除同名的键
+# 从服务端配置里移除旧版本误写的客户端键
 #
-# 这些参数只用于生成展示用的客户端配置，不属于服务端配置；早期版本曾把它们直接
-# 写进 server-config*.json，靠服务端 json.Decode 忽略未知键才不会出错，但配置文件
-# 里出现 autoexpire / conn 会让人误以为服务端在做端口轮换，所以改成本地文件保存。
+# conn / autoexpire / scavengettl / keepalivetolerance 只属于客户端，服务端二进制
+# 虽然会用 json.Decode 忽略未知键而不报错，但服务端配置里出现 autoexpire 会让人
+# 以为这台服务端在做端口轮换，所以每次生成配置都顺手清理一次。
+purge_client_keys_from_server_config() {
+	install_jq
+
+	local config_file=""
+	config_file="$(get_current_file 'config')"
+	[ -s "$config_file" ] || return 0
+
+	local filter=""
+	local k
+	for k in $CLIENT_PARAM_KEYS; do
+		if [ -z "$filter" ]; then
+			filter=".${k}"
+		else
+			filter="${filter},.${k}"
+		fi
+	done
+
+	local cleaned=""
+	cleaned="$(cat "$config_file" | $JQ_BIN "del(${filter})" 2>/dev/null)"
+	if [ -n "$cleaned" ] && [ "$cleaned" != "$(cat "$config_file")" ]; then
+		echo "$cleaned" >"$config_file"
+	fi
+}
+
+# 把客户端参数存进旁路文件 client-params<id>.json
+#
+# 这些参数只用于生成客户端配置，不属于服务端配置；早期版本曾把它们直接写进
+# server-config*.json，所以这里也一并清理残留。
 # 基线沿用已有的旁路文件，只覆盖本次真正给出的键，跟脚本对其他可选参数的处理一致：
-# 向导里选「不配置」等于保持原值不变，而不是把它们抹掉。
+# 选「不设置」等于保持原值不变，而不是把它们抹掉。
 save_client_configs() {
 	install_jq
 
 	local client_file=""
 	client_file="$(get_current_file 'clientconf')"
-	local config_file=""
-	config_file="$(get_current_file 'config')"
 
 	local client_json="{}"
 	if [ -s "$client_file" ]; then
@@ -2836,23 +2831,7 @@ save_client_configs() {
 		echo "$client_json" >"$client_file"
 	fi
 
-	# 清理旧版本写进服务端配置的客户端键
-	if [ -s "$config_file" ]; then
-		local filter=""
-		for k in $CLIENT_PARAM_KEYS; do
-			if [ -z "$filter" ]; then
-				filter=".${k}"
-			else
-				filter="${filter},.${k}"
-			fi
-		done
-
-		local cleaned=""
-		cleaned="$(cat "$config_file" | $JQ_BIN "del(${filter})" 2>/dev/null)"
-		if [ -n "$cleaned" ] && [ "$cleaned" != "$(cat "$config_file")" ]; then
-			echo "$cleaned" >"$config_file"
-		fi
-	fi
+	purge_client_keys_from_server_config
 }
 
 # 读取旁路文件里的客户端参数，让向导与生成的客户端配置能延续上次的值
@@ -2954,8 +2933,8 @@ gen_kcptun_config() {
 	write_configs_to_file "snmplog" "snmpperiod" "pprof" "acknodelay" "nodelay" \
 		"interval" "resend" "nc" "sockbuf" "smuxbuf" "keepalive" "streambuf" "smuxver"
 
-	# 客户端参数存到旁路文件，并从服务端配置中清除同名键
-	save_client_configs
+	# 客户端参数不在服务端向导里采集，这里只清理旧版本误写进服务端配置的残留键
+	purge_client_keys_from_server_config
 
 	# 以最终写入的配置为准重新推断运行用户，兼容手动编辑配置的场景
 	if [ -f "$config_file" ]; then
@@ -3998,6 +3977,67 @@ instance_show() {
 	show_current_instance_info
 }
 
+# 生成客户端配置
+#
+# conn / autoexpire 等是客户端本地策略，服务端二进制连这些字段都没有，所以它们
+# 不属于安装与重配向导：在那里问就只能把客户端状态存回服务端配置，概念和存储都
+# 会错位。本入口负责当场询问、存进旁路文件，并输出可以直接拷走的客户端 JSON。
+instance_clientconf() {
+	pre_ckeck
+
+	if [ -n "$1" ]; then
+		if is_number "$1"; then
+			if [ "$1" != "1" ]; then
+				current_instance_id="$1"
+			fi
+		else
+			cat >&2 <<-EOF
+			参数有误, 请使用 $0 clientconf <id>
+			<id> 为实例ID, 当前共有 $(get_instance_count) 个实例
+			EOF
+
+			exit 1
+		fi
+	fi
+
+	load_instance_config
+
+	local yn=""
+	cat >&1 <<-EOF
+	你选择了生成实例 kcptun${current_instance_id} 的客户端配置...
+
+	服务端实例参数 (key / crypt / mode / FEC / 窗口等) 会自动同步到客户端，
+	窗口按客户端 sndwnd = 服务端 rcvwnd 镜像。
+	是否还要设置客户端本地参数 (连接数 conn 与端口轮换策略)?
+	EOF
+	read -p "(默认: 否, 沿用已存参数) [y/n]: " yn
+
+	if [ -n "$yn" ]; then
+		case "$(first_character "$yn")" in
+			y|Y)
+				set_client_parameters
+				save_client_configs
+
+				cat >&1 <<-EOF
+				客户端参数已存入 $(get_current_file 'clientconf')
+				EOF
+				;;
+			n|N|*)
+				cat >&1 <<-'EOF'
+				保持已存参数不变（从未设置过时为 1 条连接、固定端口）
+				EOF
+				;;
+		esac
+	else
+		cat >&1 <<-'EOF'
+		保持已存参数不变（从未设置过时为 1 条连接、固定端口）
+		EOF
+	fi
+
+	echo "实例 kcptun${current_instance_id} 的客户端配置如下:"
+	show_current_instance_info
+}
+
 # 显示实例日志
 instance_log() {
 	pre_ckeck
@@ -4477,12 +4517,13 @@ installed_check() {
 			(5) 查看配置
 			(6) 查看日志输出
 			(7) 丢包测试
-			(8) 自定义版本安装
-			(9) 删除实例
-			(10) 完全卸载
-			(11) 退出脚本
+			(8) 生成客户端配置
+			(9) 自定义版本安装
+			(10) 删除实例
+			(11) 完全卸载
+			(12) 退出脚本
 			EOF
-			read -p "(默认: 1) 请选择 [1~11]: " sel
+			read -p "(默认: 1) 请选择 [1~12]: " sel
 			[ -z "$sel" ] && sel=1
 
 			case $sel in
@@ -4514,19 +4555,22 @@ installed_check() {
 					losstest_run
 					;;
 				8)
-					manual_install
+					instance_clientconf
 					;;
 				9)
+					manual_install
+					;;
+				10)
 					select_instance
 					instance_del
 					;;
-				10)
+				11)
 					do_uninstall
 					;;
-				11)
+				12)
 					;;
 				*)
-					echo "输入有误, 请输入有效数字 1~11!"
+					echo "输入有误, 请输入有效数字 1~12!"
 					continue
 					;;
 			esac
@@ -4541,7 +4585,7 @@ case "$action" in
 	install|uninstall|update|check|migrate)
 		do_${action}
 		;;
-	add|reconfig|show|log|del)
+	add|reconfig|show|log|del|clientconf)
 		instance_${action} "$2"
 		;;
 	losstest)
