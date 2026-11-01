@@ -1,11 +1,11 @@
 {
-	"shell_version": 41,
-	"shell_url": "https://github.com/TuuzNet/kcptun-script/raw/v41/kcptun.sh",
-	"shell_sha256": "bfffc06f63f378d95eef1d0ee6a5a8f5be7386517d568bb197650dd001497363",
-	"release_url": "https://github.com/TuuzNet/kcptun-script/releases/tag/v41",
-	"change_log": "1. 新增客户端参数设置（conn/autoexpire/scavengettl/keepalivetolerance）;\n2. 支持 autoexpire=-1 全自动端口模式（按堵塞判定切换，需配合新版 Kcptun）;\n3. 修复 -1 等负数被误判为非数字导致 JSON 写入错误的问题",
-	"config_version": 8,
-	"config_change_log": "1. 实例配置新增客户端参数键：conn、autoexpire、autoexpiremax、scavengettl、keepalivetolerance（服务端进程会忽略）",
+	"shell_version": 42,
+	"shell_url": "https://github.com/TuuzNet/kcptun-script/raw/v42/kcptun.sh",
+	"shell_sha256": "e9c169e4192d8ea677e6d7a29d966567037982fb7ac06b8749bb65396c1458ec",
+	"release_url": "https://github.com/TuuzNet/kcptun-script/releases/tag/v42",
+	"change_log": "1. 修复：客户端参数（conn/autoexpire/keepalivetolerance 等）不再写进服务端配置，改存旁路文件 client-params<id>.json;\n2. 旧的 server-config<id>.json 里被误写的客户端键会在下次生成配置时自动清理;\n3. 「不配置客户端参数」改为保持已存参数不变，与隐藏参数行为一致",
+	"config_version": 9,
+	"config_change_log": "1. 服务端配置恢复为纯服务端键，客户端参数移到旁路文件 client-params<id>.json;\n2. 升级到本版本后首次生成配置会自动移除服务端配置中的 conn/autoexpire 等残留键",
 	"init_version": 4,
 	"init_change_log": "1. 服务管理方式由 Supervisor 改为 systemd unit / SysVinit 脚本;\n2. 旧版 Supervisor 实例会在安装时提示迁移"
 }

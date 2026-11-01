@@ -157,7 +157,7 @@ FEC 取值参考：丢包 1%~5% 用 `parityshard 2~3`，5%~10% 用 `4~6`，超�
 
 隐藏参数（acknodelay、sockbuf、smuxbuf、keepalive、smuxver、streambuf）通常保持默认即可。
 
-客户端参数（`conn`、`autoexpire`、`autoexpiremax`、`scavengettl`、`keepalivetolerance`）在基础参数之后单独询问，它们不影响服务端进程，仅写进实例配置以便下次读取，并用于生成展示用的客户端配置文件与手机端参数字符串。
+客户端参数（`conn`、`autoexpire`、`autoexpiremax`、`scavengettl`、`keepalivetolerance`）在基础参数之后单独询问。它们属于客户端，**不会写进服务端的 `server-config<id>.json`**（写入了会让服务端配置看起来在做端口轮换），而是存在旁路文件 `/usr/local/kcptun/client-params<id>.json` 里，仅用于下次读取与生成展示用的桌面客户端 JSON 配置。手机端参数字符串不包含这些高级参数。
 
 <details>
 <summary><strong>端口轮换与全自动模式</strong>（autoexpire=-1）</summary>
@@ -175,7 +175,8 @@ FEC 取值参考：丢包 1%~5% 用 `parityshard 2~3`，5%~10% 用 `4~6`，超�
 - `keepalivetolerance` 默认 2，即容忍 2 个心跳周期无应答；`keepalive × keepalivetolerance` 必须小于内置的 30 秒会话超时，脚本会在超限时给出警告；
 - 存活探测依赖 FEC，`datashard` 或 `parityshard` 为 0 时探测不可用，判定会退化为纯静默计时，脚本同样会警告；
 - 该模式下 `autoexpiremax` 与 `scavengettl` 不参与工作，切换时旧会话会被立即关闭、不保留并存会话；
-- 按时钟轮换（`>0`）会保留旧会话继续排空，此时新旧会话在服务端争抢同一地址，可能出现“轮换后首次连接失败、第二次才成功”，属于已知副作用。
+- 按时钟轮换（`>0`）会保留旧会话继续排空，此时新旧会话在服务端争抢同一地址，可能出现“轮换后首次连接失败、第二次才成功”，属于已知副作用；
+- 向导里对客户端参数回答“否”等于**保持已存参数不变**（与隐藏参数的行为一致），不是清空；要把某个值改回去请直接编辑 `client-params<id>.json`，或重新进入客户端参数一节显式赋值。
 
 </details>
 

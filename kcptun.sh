@@ -8,8 +8,8 @@ export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
 # 版本信息，请勿修改
 # =================
-SHELL_VERSION=41
-CONFIG_VERSION=8
+SHELL_VERSION=42
+CONFIG_VERSION=9
 INIT_VERSION=4
 # =================
 
@@ -101,6 +101,9 @@ D_AUTOEXPIRE=0
 D_AUTOEXPIREMAX=0
 D_SCAVENGETTL=0
 D_KEEPALIVETOLERANCE=2
+
+# 客户端专用参数列表：服务端二进制不认识这些键，不得写进 server-config*.json
+CLIENT_PARAM_KEYS="conn autoexpire autoexpiremax scavengettl keepalivetolerance"
 # ======================
 
 # 当前选择的实例 ID
@@ -718,6 +721,7 @@ get_json_string() {
 
 # 获取当前实例的文件路径，传入参数：
 # * config: kcptun 服务端配置文件
+# * clientconf: 客户端参数旁路文件，只用于生成客户端配置，服务端进程不读取
 # * log: kcptun 日志文件路径
 # * snmp: kcptun snmp 日志文件路径
 # * service: 实例的服务文件路径（systemd unit 或 init 脚本）
@@ -725,6 +729,9 @@ get_current_file() {
 	case "$1" in
 		config)
 			printf '%s/server-config%s.json' "$KCPTUN_INSTALL_DIR" "$current_instance_id"
+			;;
+		clientconf)
+			printf '%s/client-params%s.json' "$KCPTUN_INSTALL_DIR" "$current_instance_id"
 			;;
 		log)
 			printf '%s/server%s.log' "$KCPTUN_LOG_DIR" "$current_instance_id"
@@ -2632,8 +2639,8 @@ unset_client_parameters() {
 	EOF
 }
 
-# 设置客户端参数（只用于生成展示用的客户端配置与手机端参数，
-# 同时写入实例配置里保存，服务端进程不认识这些键，会直接忽略）
+# 设置客户端参数（只用于生成展示用的桌面客户端 JSON 配置，
+# 由 save_client_configs 存在旁路文件里，不写进服务端配置）
 set_client_parameters() {
 	echo "开始设置客户端参数..."
 	local input=""
@@ -2703,9 +2710,10 @@ set_client_parameters() {
 			break
 		done
 
-		# 全自动模式不按时钟轮换，这两个定时参数不参与工作
-		autoexpiremax=""
-		scavengettl=""
+		# 全自动模式不按时钟轮换；存成显式 0 而不是留空，否则旁路文件里
+		# 会残留上次定时模式留下的值，生成的客户端配置看起来仍在轮换
+		autoexpiremax=0
+		scavengettl=0
 
 		# 未设置隐藏参数时 keepalive 为空，按客户端默认值计算检测窗口
 		local window=$(( ${keepalive:-$D_KEEPALIVE} * keepalivetolerance ))
@@ -2792,6 +2800,76 @@ set_client_parameters() {
 	EOF
 }
 
+# 把客户端参数存进旁路文件，并从服务端配置里移除同名的键
+#
+# 这些参数只用于生成展示用的客户端配置，不属于服务端配置；早期版本曾把它们直接
+# 写进 server-config*.json，靠服务端 json.Decode 忽略未知键才不会出错，但配置文件
+# 里出现 autoexpire / conn 会让人误以为服务端在做端口轮换，所以改成本地文件保存。
+# 基线沿用已有的旁路文件，只覆盖本次真正给出的键，跟脚本对其他可选参数的处理一致：
+# 向导里选「不配置」等于保持原值不变，而不是把它们抹掉。
+save_client_configs() {
+	install_jq
+
+	local client_file=""
+	client_file="$(get_current_file 'clientconf')"
+	local config_file=""
+	config_file="$(get_current_file 'config')"
+
+	local client_json="{}"
+	if [ -s "$client_file" ]; then
+		client_json="$(cat "$client_file")"
+	fi
+
+	local k; local v
+	for k in $CLIENT_PARAM_KEYS; do
+		v="$(eval echo "\$$k")"
+		[ -z "$v" ] && continue
+
+		if is_int "$v"; then
+			client_json="$(echo "$client_json" | $JQ_BIN ".${k}=${v}")"
+		else
+			client_json="$(echo "$client_json" | $JQ_BIN ".${k}=\"${v}\"")"
+		fi
+	done
+
+	if [ ! -f "$client_file" ] || [ "$client_json" != "$(cat "$client_file")" ]; then
+		echo "$client_json" >"$client_file"
+	fi
+
+	# 清理旧版本写进服务端配置的客户端键
+	if [ -s "$config_file" ]; then
+		local filter=""
+		for k in $CLIENT_PARAM_KEYS; do
+			if [ -z "$filter" ]; then
+				filter=".${k}"
+			else
+				filter="${filter},.${k}"
+			fi
+		done
+
+		local cleaned=""
+		cleaned="$(cat "$config_file" | $JQ_BIN "del(${filter})" 2>/dev/null)"
+		if [ -n "$cleaned" ] && [ "$cleaned" != "$(cat "$config_file")" ]; then
+			echo "$cleaned" >"$config_file"
+		fi
+	fi
+}
+
+# 读取旁路文件里的客户端参数，让向导与生成的客户端配置能延续上次的值
+load_client_configs() {
+	local client_file=""
+	client_file="$(get_current_file 'clientconf')"
+	[ -s "$client_file" ] || return 0
+
+	install_jq
+
+	local k; local v
+	for k in $CLIENT_PARAM_KEYS; do
+		v="$(cat "$client_file" | $JQ_BIN -r ".${k} // empty" 2>/dev/null)"
+		[ -n "$v" ] && eval "${k}=\"${v}\""
+	done
+}
+
 # 生成 Kcptun 服务端配置文件
 gen_kcptun_config() {
 	mk_file_dir() {
@@ -2874,8 +2952,10 @@ gen_kcptun_config() {
 	}
 
 	write_configs_to_file "snmplog" "snmpperiod" "pprof" "acknodelay" "nodelay" \
-		"interval" "resend" "nc" "sockbuf" "smuxbuf" "keepalive" "streambuf" "smuxver" \
-		"conn" "autoexpire" "autoexpiremax" "scavengettl" "keepalivetolerance"
+		"interval" "resend" "nc" "sockbuf" "smuxbuf" "keepalive" "streambuf" "smuxver"
+
+	# 客户端参数存到旁路文件，并从服务端配置中清除同名键
+	save_client_configs
 
 	# 以最终写入的配置为准重新推断运行用户，兼容手动编辑配置的场景
 	if [ -f "$config_file" ]; then
@@ -3241,6 +3321,9 @@ load_instance_config() {
 	if [ -n "$listen_port" ]; then
 		current_listen_port="$listen_port"
 	fi
+
+	# 客户端参数不在服务端配置里，从旁路文件补读
+	load_client_configs
 }
 
 # 显示服务端 Kcptun 版本，和客户端文件的下载地址
