@@ -158,6 +158,10 @@ FEC 取值参考：丢包 1%~5% 用 `parityshard 2~3`，5%~10% 用 `4~6`，超�
 
 隐藏参数（acknodelay、sockbuf、smuxbuf、keepalive、smuxver、streambuf）通常保持默认即可。
 
+> 隐藏参数那一题默认是「否」。从 v44 起，选「否」意为**不改动已存在的隐藏参数**，而不是删除它们——旧版本会先把配置文件清空重建，导致上一轮配好的 `streambuf` / `smuxver` / `keepalive` 等在一跑覆盖安装或重新配置后静默消失。开关语义的参数不受此影响：`是否记录 SNMP 日志?` 选「否」仍会真的从配置里移除 `snmplog` / `snmpperiod`；`mode` 不是 `manual` 时也会移除 `nodelay` / `interval` / `resend` / `nc`。
+>
+> 已经被旧版本丢掉的值需要重新配一次（菜单 (2) 重新配置 → 隐藏参数选是），之后就不会再丢了。
+
 客户端参数（`conn`、`autoexpire`、`autoexpiremax`、`scavengettl`、`keepalivetolerance`）**不在安装/重配向导里询问**，而是在菜单 `(8) 生成客户端配置`（或 `sh kcptun.sh clientconf [id]`）里按需设置。因为服务端二进制连这些字段都没有，放在服务端向导里就只能把客户端状态存回服务端配置，概念与存储都会错位。
 
 它们只存在旁路文件 `/usr/local/kcptun/client-params<id>.json`，`server-config<id>.json` 保持纯服务端键（旧版本误写的残留键会在下次生成配置时自动清理）。该文件只用于下次读取与生成桌面客户端 JSON 配置；手机端参数字符串不包含这些高级参数。

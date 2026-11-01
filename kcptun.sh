@@ -8,7 +8,7 @@ export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
 # 版本信息，请勿修改
 # =================
-SHELL_VERSION=43
+SHELL_VERSION=44
 CONFIG_VERSION=9
 INIT_VERSION=4
 # =================
@@ -104,6 +104,9 @@ D_KEEPALIVETOLERANCE=2
 
 # 客户端专用参数列表：服务端二进制不认识这些键，不得写进 server-config*.json
 CLIENT_PARAM_KEYS="conn autoexpire autoexpiremax scavengettl keepalivetolerance"
+
+# 开关型参数：向导里选“否”就是明确要关闭，写入时要从配置里删掉而不是保留旧值
+DELETE_ON_WRITE_KEYS=""
 # ======================
 
 # 当前选择的实例 ID
@@ -2182,6 +2185,8 @@ set_kcptun_config() {
 	unset_snmp() {
 		snmplog=""
 		snmpperiod=""
+		# SNMP 是开关语义：选否就应当真的关掉，不能因为合并而保留旧值
+		DELETE_ON_WRITE_KEYS="snmplog snmpperiod"
 		cat >&1 <<-EOF
 		---------------------------
 		不记录 SNMP 日志
@@ -2579,7 +2584,7 @@ set_hidden_parameters() {
 
 	cat >&1 <<-EOF
 	---------------------------
-	$smuxver = ${smuxver}
+	smuxver = ${smuxver}
 	---------------------------
 	EOF
 
@@ -2888,7 +2893,8 @@ gen_kcptun_config() {
 		target_addr="[${target_addr}]"
 	fi
 
-	cat > "$config_file"<<-EOF
+	local base_json=""
+	base_json="$(cat <<-EOF
 	{
 	  "listen": "${listen_addr}:${listen_port}",
 	  "target": "${target_addr}:${target_port}",
@@ -2906,6 +2912,50 @@ gen_kcptun_config() {
 	  "tcp": ${tcp}
 	}
 	EOF
+	)"
+
+	# 已有文件时走「合并」而不是「清空重建」。
+	# write_configs_to_file 只会写非空变量，如果这里把文件清零重建，上一轮配好、
+	# 而本轮没重新询问到的隐藏参数（streambuf / smuxver / keepalive / sockbuf /
+	# smuxbuf / acknodelay）就会静默消失——隐藏参数那一题默认是「否」，所以一跑
+	# 覆盖安装或重新配置就会丢这些配置。合并让基础键以本轮答案为准，同时保留
+	# 本轮没有重新给出的其他键。
+	install_jq
+
+	local merged_json=""
+	if [ -s "$config_file" ]; then
+		merged_json="$(echo "$base_json" | $JQ_BIN -s '.[0] * .[1]' "$config_file" - 2>/dev/null)"
+	fi
+
+	if [ -n "$merged_json" ]; then
+		echo "$merged_json" >"$config_file"
+	else
+		echo "$base_json" >"$config_file"
+	fi
+
+	# 删除那些“本轮被明确选为关闭”的开关型参数，以及不再是 manual 模式时的
+	# manual 专用参数。它们跟隐藏参数不同：“否”在这里就是关闭的意思。
+	local del_keys="$DELETE_ON_WRITE_KEYS"
+	if [ "$mode" != "manual" ]; then
+		del_keys="$del_keys nodelay interval resend nc"
+	fi
+
+	if [ -n "$del_keys" ]; then
+		local dfilter=""
+		for k in $del_keys; do
+			if [ -z "$dfilter" ]; then
+				dfilter=".${k}"
+			else
+				dfilter="${dfilter},.${k}"
+			fi
+		done
+
+		local deleted_json=""
+		deleted_json="$(cat "$config_file" | $JQ_BIN "del(${dfilter})" 2>/dev/null)"
+		if [ -n "$deleted_json" ] && [ "$deleted_json" != "$(cat "$config_file")" ]; then
+			echo "$deleted_json" >"$config_file"
+		fi
+	fi
 
 	write_configs_to_file() {
 		install_jq

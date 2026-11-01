@@ -1,11 +1,11 @@
 {
-	"shell_version": 43,
-	"shell_url": "https://github.com/TuuzNet/kcptun-script/raw/v43/kcptun.sh",
-	"shell_sha256": "f83fc5ad2b9e162072189ccc78f74adff18df0699c1616997ca34468e00a18cc",
-	"release_url": "https://github.com/TuuzNet/kcptun-script/releases/tag/v43",
-	"change_log": "1. 客户端参数从安装/重配向导里移出，改为菜单 (8)「生成客户端配置」按需设置（也可用 sh kcptun.sh clientconf [id]）;\n2. 安装与重配只清理旧版本误写进服务端配置的客户端键，不再产生客户端状态;\n3. 在生成入口回答「否」等于沿用已存参数，不会清空",
+	"shell_version": 44,
+	"shell_url": "https://github.com/TuuzNet/kcptun-script/raw/v44/kcptun.sh",
+	"shell_sha256": "0180a22f741e7ccc72396e98cf2673a95d211ba5077f3fceab5fb255def19103",
+	"release_url": "https://github.com/TuuzNet/kcptun-script/releases/tag/v44",
+	"change_log": "1. 修复：覆盖安装/重新配置不再清空隐藏参数，streambuf / smuxver / keepalive 等不会再静默消失;\n2. 隐藏参数选「否」= 不改动已存值；SNMP 这类开关选「否」仍会真的移除对应键;\n3. mode 不再是 manual 时清掉 nodelay / interval / resend / nc;\n4. 修正 smuxver 确认信息里的变量名显示",
 	"config_version": 9,
-	"config_change_log": "1. 配置模板与 v42 相同，服务端配置继续保持纯服务端键；客户端参数存于 client-params<id>.json",
+	"config_change_log": "1. 配置模板不变，仅修复脚本写入配置时丢失已有键的行为",
 	"init_version": 4,
 	"init_change_log": "1. 服务管理方式由 Supervisor 改为 systemd unit / SysVinit 脚本;\n2. 旧版 Supervisor 实例会在安装时提示迁移"
 }
