@@ -8,7 +8,7 @@ export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
 # 版本信息，请勿修改
 # =================
-SHELL_VERSION=44
+SHELL_VERSION=45
 CONFIG_VERSION=9
 INIT_VERSION=4
 # =================
@@ -2959,29 +2959,80 @@ gen_kcptun_config() {
 
 	write_configs_to_file() {
 		install_jq
-		local k; local v
+		local k; local v; local next
+		local failed=""
 
 		local json=""
 		json="$(cat "$config_file")"
 		for k in "$@"; do
 			v="$(eval echo "\$$k")"
 
-			if [ -n "$v" ]; then
-				if is_int "$v" || [ "$v" = "false" ] || [ "$v" = "true" ]; then
-					json="$(echo "$json" | $JQ_BIN ".${k}=$v")"
-				else
-					json="$(echo "$json" | $JQ_BIN ".${k}=\"$v\"")"
-				fi
+			[ -z "$v" ] && continue
+
+			# 用 --arg / --argjson 传值，而不是把值拼进 jq 程序字符串
+			if is_int "$v" || [ "$v" = "false" ] || [ "$v" = "true" ]; then
+				next="$(printf '%s' "$json" | $JQ_BIN --argjson val "$v" ".${k}=\$val" 2>/dev/null)"
+			else
+				next="$(printf '%s' "$json" | $JQ_BIN --arg val "$v" ".${k}=\$val" 2>/dev/null)"
 			fi
+
+			# 关键修正：以前失败会把整个 json 变成空串，导致“一个键写失败、整批配置全部
+			# 静默不写”，而向导与客户端配置 demo 读的是变量，看起来就像配好了
+			if [ -z "$next" ]; then
+				failed="${failed} ${k}=${v}"
+				continue
+			fi
+
+			json="$next"
 		done
+
+		if [ -n "$failed" ]; then
+			cat >&2 <<-EOF
+			警告: 以下配置项写入 jq 失败，已跳过（其余配置正常写入）:$failed
+			请反馈给脚本作者，并确认 jq 可用 (jq --version)
+			EOF
+			any_key_to_continue
+		fi
 
 		if [ -n "$json" ] && [ "$json" != "$(cat "$config_file")" ]; then
 			echo "$json" >"$config_file"
 		fi
 	}
 
-	write_configs_to_file "snmplog" "snmpperiod" "pprof" "acknodelay" "nodelay" \
-		"interval" "resend" "nc" "sockbuf" "smuxbuf" "keepalive" "streambuf" "smuxver"
+	SERVER_WRITABLE_KEYS="snmplog snmpperiod pprof acknodelay nodelay interval resend nc sockbuf smuxbuf keepalive streambuf smuxver"
+
+	# shellcheck disable=SC2086
+	write_configs_to_file $SERVER_WRITABLE_KEYS
+
+	# 写完自校：本轮确实给过值的键必须能在文件里读到，否则就是静默丢配置，
+	# 宁可在这里显式报错，也不要让用户之后自己到文件里发现
+	verify_written_configs() {
+		install_jq
+
+		local k; local v; local actual
+		local missing=""
+		for k in $1; do
+			v="$(eval echo "\$$k")"
+			[ -z "$v" ] && continue
+
+			actual="$(cat "$config_file" | $JQ_BIN -r ".${k} // empty" 2>/dev/null)"
+			if [ -z "$actual" ]; then
+				missing="${missing} ${k}"
+			fi
+		done
+
+		if [ -n "$missing" ]; then
+			cat >&2 <<-EOF
+			错误: 配置写入后校验失败，以下参数在向导里给过值但没进配置文件:$missing
+			配置文件: ${config_file}
+			请重新运行一次配置，并把上面的信息反馈给脚本作者。
+			EOF
+			any_key_to_continue
+		fi
+	}
+
+	# shellcheck disable=SC2086
+	verify_written_configs "$SERVER_WRITABLE_KEYS"
 
 	# 客户端参数不在服务端向导里采集，这里只清理旧版本误写进服务端配置的残留键
 	purge_client_keys_from_server_config

@@ -1,11 +1,11 @@
 {
-	"shell_version": 44,
-	"shell_url": "https://github.com/TuuzNet/kcptun-script/raw/v44/kcptun.sh",
-	"shell_sha256": "0180a22f741e7ccc72396e98cf2673a95d211ba5077f3fceab5fb255def19103",
-	"release_url": "https://github.com/TuuzNet/kcptun-script/releases/tag/v44",
-	"change_log": "1. 修复：覆盖安装/重新配置不再清空隐藏参数，streambuf / smuxver / keepalive 等不会再静默消失;\n2. 隐藏参数选「否」= 不改动已存值；SNMP 这类开关选「否」仍会真的移除对应键;\n3. mode 不再是 manual 时清掉 nodelay / interval / resend / nc;\n4. 修正 smuxver 确认信息里的变量名显示",
+	"shell_version": 45,
+	"shell_url": "https://github.com/TuuzNet/kcptun-script/raw/v45/kcptun.sh",
+	"shell_sha256": "c085e44cece66dc0e3aa5bffb58522b322db2fb616cf83732079e4467e4d8e88",
+	"release_url": "https://github.com/TuuzNet/kcptun-script/releases/tag/v45",
+	"change_log": "1. 修复：单个配置项 jq 写入失败不再连带丢掉整批隐藏参数（以前会让 json 变空串，于是一个都不写）;\n2. jq 调用改用 --arg / --argjson 传值;\n3. 写完配置自校：本轮给过值但没落盘的键会直接报错列出，不再静默",
 	"config_version": 9,
-	"config_change_log": "1. 配置模板不变，仅修复脚本写入配置时丢失已有键的行为",
+	"config_change_log": "1. 配置模板不变",
 	"init_version": 4,
 	"init_change_log": "1. 服务管理方式由 Supervisor 改为 systemd unit / SysVinit 脚本;\n2. 旧版 Supervisor 实例会在安装时提示迁移"
 }
