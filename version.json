@@ -1,11 +1,11 @@
 {
-	"shell_version": 40,
-	"shell_url": "https://github.com/TuuzNet/kcptun-script/raw/v40/kcptun.sh",
-	"shell_sha256": "7cdb5989ba645f08513a58fa30f35514e2274186ae1deb38c08048eef16a5fb7",
-	"release_url": "https://github.com/TuuzNet/kcptun-script/releases/tag/v40",
-	"change_log": "1. 丢包测试说明更新为分向下/上行两阶段测试（需配合新版 Kcptun）;\n2. 提示总耗时约为单方向时长的两倍",
-	"config_version": 7,
-	"config_change_log": "1. 配置文件格式无变化",
+	"shell_version": 41,
+	"shell_url": "https://github.com/TuuzNet/kcptun-script/raw/v41/kcptun.sh",
+	"shell_sha256": "bfffc06f63f378d95eef1d0ee6a5a8f5be7386517d568bb197650dd001497363",
+	"release_url": "https://github.com/TuuzNet/kcptun-script/releases/tag/v41",
+	"change_log": "1. 新增客户端参数设置（conn/autoexpire/scavengettl/keepalivetolerance）;\n2. 支持 autoexpire=-1 全自动端口模式（按堵塞判定切换，需配合新版 Kcptun）;\n3. 修复 -1 等负数被误判为非数字导致 JSON 写入错误的问题",
+	"config_version": 8,
+	"config_change_log": "1. 实例配置新增客户端参数键：conn、autoexpire、autoexpiremax、scavengettl、keepalivetolerance（服务端进程会忽略）",
 	"init_version": 4,
 	"init_change_log": "1. 服务管理方式由 Supervisor 改为 systemd unit / SysVinit 脚本;\n2. 旧版 Supervisor 实例会在安装时提示迁移"
 }

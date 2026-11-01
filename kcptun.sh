@@ -8,8 +8,8 @@ export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
 # 版本信息，请勿修改
 # =================
-SHELL_VERSION=39
-CONFIG_VERSION=7
+SHELL_VERSION=41
+CONFIG_VERSION=8
 INIT_VERSION=4
 # =================
 
@@ -94,6 +94,13 @@ D_KEEPALIVE=10
 # KCP新版支持，SMux默认为2，BUF大小改为16M
 D_SMUXVER=2
 D_STREAMBUF=16777217
+
+# 客户端参数默认值，这些键只写进客户端配置，服务端进程会忽略
+D_CONN=1
+D_AUTOEXPIRE=0
+D_AUTOEXPIREMAX=0
+D_SCAVENGETTL=0
+D_KEEPALIVETOLERANCE=2
 # ======================
 
 # 当前选择的实例 ID
@@ -155,6 +162,19 @@ command_exists() {
 # 判断输入内容是否为数字
 is_number() {
 	expr "$1" + 1 >/dev/null 2>&1
+}
+
+# 判断输入内容是否为整数，允许一个前导负号
+# expr "-1" + 1 的结果是 0，退出码为 1，所以 is_number 会把 -1 判成非数字，
+# 而 autoexpire=-1 是合法的配置值，写入 JSON 时必须保持数字而非字符串
+is_int() {
+	local number="${1#-}"
+	case "$number" in
+		'' | *[!0-9]*)
+			return 1
+			;;
+	esac
+	return 0
 }
 
 # 按任意键继续
@@ -2243,6 +2263,24 @@ set_kcptun_config() {
 		unset_hidden_parameters
 	fi
 
+	cat >&1 <<-'EOF'
+	是否设置客户端参数（连接数与端口轮换策略）?
+	不设置则使用默认值：1 条连接，固定端口
+	EOF
+	read -p "(默认: 否) [y/n]: " yn
+	if [ -n "$yn" ]; then
+		case "$(first_character "$yn")" in
+			y|Y)
+				set_client_parameters
+				;;
+			n|N|*)
+				unset_client_parameters
+				;;
+		esac
+	else
+		unset_client_parameters
+	fi
+
 	# 监听低端口或使用 TCP 时需要 root 权限
 	if echo "$listen_port" | grep -qE '^[0-9]+-[0-9]+$'; then
 		range_start=$(echo "$listen_port" | cut -d'-' -f1)
@@ -2580,6 +2618,180 @@ set_hidden_parameters() {
 	EOF
 }
 
+# 不设置客户端参数，清空这些变量，让实例配置与生成的客户端配置回到默认值
+unset_client_parameters() {
+	conn=""
+	autoexpire=""
+	autoexpiremax=""
+	scavengettl=""
+	keepalivetolerance=""
+	cat >&1 <<-EOF
+	---------------------------
+	不配置客户端参数
+	---------------------------
+	EOF
+}
+
+# 设置客户端参数（只用于生成展示用的客户端配置与手机端参数，
+# 同时写入实例配置里保存，服务端进程不认识这些键，会直接忽略）
+set_client_parameters() {
+	echo "开始设置客户端参数..."
+	local input=""
+
+	[ -z "$conn" ] && conn="$D_CONN"
+	while true
+	do
+		cat >&1 <<-'EOF'
+		请设置客户端到服务端的 KCP 连接数（也就是本地 UDP 端口数）
+		EOF
+		read -p "(默认: ${conn}): " input
+		if [ -n "$input" ]; then
+			if ! is_int "$input" || [ "$input" -lt 1 ]; then
+				echo "输入有误, 请输入大于0的整数!"
+				continue
+			fi
+
+			conn=$input
+		fi
+		break
+	done
+
+	cat >&1 <<-EOF
+	---------------------------
+	conn = ${conn}
+	---------------------------
+	EOF
+
+	[ -z "$autoexpire" ] && autoexpire="$D_AUTOEXPIRE"
+	while true
+	do
+		cat >&1 <<-EOF
+		请设置客户端端口轮换策略 (autoexpire)：
+		  0  : 固定端口，不轮换
+		  -1 : 全自动模式，永不按时钟轮换，只有端口被判定堵塞时才切换全部端口
+		  >0 : 每隔指定秒数轮换一次端口
+		EOF
+		read -p "(默认: ${autoexpire}): " input
+		if [ -n "$input" ]; then
+			if ! is_int "$input" || [ "$input" -lt -1 ]; then
+				echo "输入有误, 请输入 -1 或不小于0的整数!"
+				continue
+			fi
+
+			autoexpire=$input
+		fi
+		break
+	done
+
+	if [ "$autoexpire" = "-1" ]; then
+		[ -z "$keepalivetolerance" ] && keepalivetolerance="$D_KEEPALIVETOLERANCE"
+		while true
+		do
+			cat >&1 <<-'EOF'
+			全自动模式：连续多少个心跳没有应答就把端口判定为堵塞 (keepalivetolerance)
+			检测窗口 = keepalive x keepalivetolerance，必须小于内置的30秒会话超时
+			EOF
+			read -p "(默认: ${keepalivetolerance}): " input
+			if [ -n "$input" ]; then
+				if ! is_int "$input" || [ "$input" -lt 1 ]; then
+					echo "输入有误, 请输入大于0的整数!"
+					continue
+				fi
+
+				keepalivetolerance=$input
+			fi
+			break
+		done
+
+		# 全自动模式不按时钟轮换，这两个定时参数不参与工作
+		autoexpiremax=""
+		scavengettl=""
+
+		# 未设置隐藏参数时 keepalive 为空，按客户端默认值计算检测窗口
+		local window=$(( ${keepalive:-$D_KEEPALIVE} * keepalivetolerance ))
+		if [ "$window" -ge 30 ]; then
+			cat >&1 <<-EOF
+			警告：keepalive(${keepalive:-$D_KEEPALIVE}) x keepalivetolerance(${keepalivetolerance}) = ${window}s，
+			      大于等于内置的 30 秒会话超时，会话会先被超时关闭。请调小 keepalive 或 keepalivetolerance。
+			EOF
+			any_key_to_continue
+		fi
+
+		if [ "$datashard" = "0" ] || [ "$parityshard" = "0" ]; then
+			cat >&1 <<-EOF
+			警告：未开启 FEC(datashard/parityshard)，存活探测不可用，
+			      全自动模式将只按心跳静默判定端口堵塞，误判概率上升。
+			EOF
+			any_key_to_continue
+		fi
+
+		cat >&1 <<-EOF
+		---------------------------
+		autoexpire = ${autoexpire}
+		keepalivetolerance = ${keepalivetolerance}
+		---------------------------
+		EOF
+	else
+		keepalivetolerance=""
+
+		if [ "$autoexpire" -gt 0 ]; then
+			[ -z "$autoexpiremax" ] && autoexpiremax="$D_AUTOEXPIREMAX"
+			while true
+			do
+				cat >&1 <<-EOF
+				请设置端口轮换周期的随机上限 (autoexpiremax)，0 表示不随机
+				EOF
+				read -p "(默认: ${autoexpiremax}): " input
+				if [ -n "$input" ]; then
+					if ! is_int "$input" || [ "$input" -lt 0 ]; then
+						echo "输入有误, 请输入不小于0的整数!"
+						continue
+					fi
+
+					autoexpiremax=$input
+				fi
+				break
+			done
+
+			[ -z "$scavengettl" ] && scavengettl="$D_SCAVENGETTL"
+			while true
+			do
+				cat >&1 <<-EOF
+				请设置旧连接的强制回收时限 (scavengettl)，0 表示永不强制关闭
+				注意：保留旧连接会与新连接在服务端争抢同一地址，可能导致轮换后首次连接失败
+				EOF
+				read -p "(默认: ${scavengettl}): " input
+				if [ -n "$input" ]; then
+					if ! is_int "$input" || [ "$input" -lt 0 ]; then
+						echo "输入有误, 请输入不小于0的整数!"
+						continue
+					fi
+
+					scavengettl=$input
+				fi
+				break
+			done
+		else
+			autoexpiremax=""
+			scavengettl=""
+		fi
+
+		cat >&1 <<-EOF
+		---------------------------
+		autoexpire = ${autoexpire}
+		autoexpiremax = ${autoexpiremax}
+		scavengettl = ${scavengettl}
+		---------------------------
+		EOF
+	fi
+
+	cat >&1 <<-EOF
+	---------------------------
+	客户端参数设置完成
+	---------------------------
+	EOF
+}
+
 # 生成 Kcptun 服务端配置文件
 gen_kcptun_config() {
 	mk_file_dir() {
@@ -2648,10 +2860,10 @@ gen_kcptun_config() {
 			v="$(eval echo "\$$k")"
 
 			if [ -n "$v" ]; then
-				if is_number "$v" || [ "$v" = "false" ] || [ "$v" = "true" ]; then
-					json="$(echo "$json" | $JQ_BIN ".$k=$v")"
+				if is_int "$v" || [ "$v" = "false" ] || [ "$v" = "true" ]; then
+					json="$(echo "$json" | $JQ_BIN ".${k}=$v")"
 				else
-					json="$(echo "$json" | $JQ_BIN ".$k=\"$v\"")"
+					json="$(echo "$json" | $JQ_BIN ".${k}=\"$v\"")"
 				fi
 			fi
 		done
@@ -2662,7 +2874,8 @@ gen_kcptun_config() {
 	}
 
 	write_configs_to_file "snmplog" "snmpperiod" "pprof" "acknodelay" "nodelay" \
-		"interval" "resend" "nc" "sockbuf" "smuxbuf" "keepalive" "streambuf" "smuxver"
+		"interval" "resend" "nc" "sockbuf" "smuxbuf" "keepalive" "streambuf" "smuxver" \
+		"conn" "autoexpire" "autoexpiremax" "scavengettl" "keepalivetolerance"
 
 	# 以最终写入的配置为准重新推断运行用户，兼容手动编辑配置的场景
 	if [ -f "$config_file" ]; then
@@ -3071,7 +3284,8 @@ show_current_instance_info() {
 
 	show_configs "key" "crypt" "mode" "mtu" "sndwnd" "rcvwnd" "datashard" \
 		"parityshard" "dscp" "nocomp" "quiet" "tcp" "nodelay" "interval" "resend" \
-		"nc" "acknodelay" "sockbuf" "smuxbuf" "keepalive" "streambuf" "smuxver"
+		"nc" "acknodelay" "sockbuf" "smuxbuf" "keepalive" "streambuf" "smuxver" \
+		"conn" "autoexpire" "autoexpiremax" "scavengettl" "keepalivetolerance"
 
 	show_version_and_client_url
 
@@ -3102,7 +3316,7 @@ show_current_instance_info() {
 			fi
 
 			if [ -n "$v" ]; then
-				if is_number "$v" || [ "$v" = "true" ] || [ "$v" = "false" ]; then
+				if is_int "$v" || [ "$v" = "true" ] || [ "$v" = "false" ]; then
 					client_config="$(echo "$client_config" | $JQ_BIN -r ".${k}=${v}")"
 				else
 					client_config="$(echo "$client_config" | $JQ_BIN -r ".${k}=\"${v}\"")"
@@ -3113,7 +3327,8 @@ show_current_instance_info() {
 
 	gen_client_configs "crypt" "mode" "mtu" "sndwnd" "rcvwnd" "datashard" \
 		"parityshard" "dscp" "nocomp" "quiet" "tcp" "nodelay" "interval" "resend" \
-		"nc" "acknodelay" "sockbuf" "smuxbuf" "keepalive" "streambuf" "smuxver"
+		"nc" "acknodelay" "sockbuf" "smuxbuf" "keepalive" "streambuf" "smuxver" \
+		"conn" "autoexpire" "autoexpiremax" "scavengettl" "keepalivetolerance"
 
 	cat >&1 <<-EOF
 
@@ -3153,6 +3368,9 @@ show_current_instance_info() {
 
 	手机端参数可以使用:
 	  ${mobile_config}
+
+	提示：手机端参数字符串不包含 conn / autoexpire / keepalivetolerance 等客户端高级参数，
+	      需要这些参数时请使用上面生成的桌面客户端 JSON 配置文件。
 
 	EOF
 }

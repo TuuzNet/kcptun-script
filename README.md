@@ -157,6 +157,28 @@ FEC 取值参考：丢包 1%~5% 用 `parityshard 2~3`，5%~10% 用 `4~6`，超�
 
 隐藏参数（acknodelay、sockbuf、smuxbuf、keepalive、smuxver、streambuf）通常保持默认即可。
 
+客户端参数（`conn`、`autoexpire`、`autoexpiremax`、`scavengettl`、`keepalivetolerance`）在基础参数之后单独询问，它们不影响服务端进程，仅写进实例配置以便下次读取，并用于生成展示用的客户端配置文件与手机端参数字符串。
+
+<details>
+<summary><strong>端口轮换与全自动模式</strong>（autoexpire=-1）</summary>
+
+`autoexpire` 控制客户端本地 UDP 端口的轮换策略：
+
+| 取值 | 行为 |
+| --- | --- |
+| `0` | 固定端口，不轮换（默认） |
+| `-1` | **全自动模式**：永不按时钟轮换；只有当某条连接连续 `keepalive × keepalivetolerance` 秒收不到对端任何数据，且 OOB 存活探测也无应答时，才一次性切换全部端口 |
+| `>0` | 每隔 `autoexpire`~`autoexpiremax` 秒按时钟轮换（`autoexpiremax=0` 表示不随机） |
+
+全自动模式说明：
+
+- `keepalivetolerance` 默认 2，即容忍 2 个心跳周期无应答；`keepalive × keepalivetolerance` 必须小于内置的 30 秒会话超时，脚本会在超限时给出警告；
+- 存活探测依赖 FEC，`datashard` 或 `parityshard` 为 0 时探测不可用，判定会退化为纯静默计时，脚本同样会警告；
+- 该模式下 `autoexpiremax` 与 `scavengettl` 不参与工作，切换时旧会话会被立即关闭、不保留并存会话；
+- 按时钟轮换（`>0`）会保留旧会话继续排空，此时新旧会话在服务端争抢同一地址，可能出现“轮换后首次连接失败、第二次才成功”，属于已知副作用。
+
+</details>
+
 </details>
 
 ---
