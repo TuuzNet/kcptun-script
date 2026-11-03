@@ -371,4 +371,3 @@ sh kcptun.sh migrate
 
 - 项目仓库：<https://github.com/TuuzNet/kcptun-script>
 - 版本发布：<https://github.com/TuuzNet/kcptun-script/releases>
-- 交流群：94537310
